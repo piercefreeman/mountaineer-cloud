@@ -3,10 +3,10 @@ from typing import Any, cast
 from pydantic import model_validator
 from pydantic.fields import FieldInfo
 
-from mountaineer_cloud.primitives.storage import (
-    CloudFile,
+from mountaineer_cloud.primitives.base import (
+    get_cloud_core_type,
     get_cloud_field_definition,
-    get_cloud_file_core_type,
+    get_cloud_primitive_type,
 )
 
 
@@ -33,16 +33,23 @@ class CloudMixin:
             dict[str, FieldInfo], getattr(type(self), "model_fields", {})
         )
         for field_name, field_info in model_fields.items():
+            current_value = getattr(self, field_name)
             bound_value = self._bind_cloud_value(
                 field_name,
-                getattr(self, field_name),
+                current_value,
                 field_info,
             )
-            if bound_value is not getattr(self, field_name):
+            if bound_value is not current_value:
+                # Hack to skip our internal __setattr__ implementation
                 object.__setattr__(self, field_name, bound_value)
         return self
 
     def __setattr__(self, name: str, value: Any) -> None:
+        """
+        If we're explicitly set a new value for a field, resolve their metadata defined at the Field() level like we
+        do during model construction in _bind_cloud_fields().
+
+        """
         model_fields = cast(
             dict[str, FieldInfo], getattr(type(self), "model_fields", {})
         )
@@ -56,28 +63,29 @@ class CloudMixin:
         value: Any,
         field_info: FieldInfo,
     ) -> Any:
+        # Make sure this field has actually set their metadata via CloudField()
         definition = get_cloud_field_definition(field_info)
         if definition is None or value is None:
             return value
 
-        if get_cloud_file_core_type(field_info.annotation) is None:
+        primitive_type = get_cloud_primitive_type(field_info.annotation)
+        if primitive_type is None or get_cloud_core_type(field_info.annotation) is None:
             raise ValueError(
-                f"{self.__class__.__name__}.{field_name} uses CloudField(...) "
-                "but is not annotated as CloudFile[CoreType]."
+                f"{self.__class__.__name__}.{field_name} uses "
+                f"{definition.field_factory_name}(...) but is not annotated as "
+                "CloudPrimitive[CoreType]."
             )
 
-        if isinstance(value, CloudFile):
-            return value.bind(
-                definition=definition,
-                owner=self,
-                field_name=field_name,
+        if not issubclass(primitive_type, definition.primitive_type):
+            raise ValueError(
+                f"{self.__class__.__name__}.{field_name} uses "
+                f"{definition.field_factory_name}(...) but is annotated as "
+                f"{primitive_type.__name__}[CoreType] instead of "
+                f"{definition.primitive_type.__name__}[CoreType]."
             )
 
-        if isinstance(value, str):
-            return CloudFile(value).bind(
-                definition=definition,
-                owner=self,
-                field_name=field_name,
-            )
-
-        return value
+        return definition.bind_field_value(
+            value,
+            owner=self,
+            field_name=field_name,
+        )

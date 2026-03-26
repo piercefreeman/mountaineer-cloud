@@ -1,4 +1,3 @@
-import types
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -6,14 +5,9 @@ from io import BytesIO
 from typing import (
     IO,
     Any,
-    Generic,
     TypeVar,
-    Union,
     cast,
-    get_args,
-    get_origin,
 )
-from weakref import ref as weakref_ref
 
 from pydantic import Field, GetCoreSchemaHandler
 from pydantic.fields import FieldInfo
@@ -24,6 +18,11 @@ from pydantic_core import (
     core_schema,
 )
 
+from mountaineer_cloud.primitives.base import (
+    CloudFieldDefinitionBase,
+    CloudValueBase,
+    get_cloud_field_definition as get_base_cloud_field_definition,
+)
 from mountaineer_cloud.providers_common.s3_compat import (
     CloudRuntime,
     CompressionType,
@@ -37,13 +36,17 @@ T = TypeVar("T")
 
 
 @dataclass(frozen=True)
-class CloudFieldDefinition:
+class CloudFieldDefinition(CloudFieldDefinitionBase):
     bucket: str
     prefix: str = ""
     suffix: str = ""
     compression: CompressionType = CompressionType.RAW
     storage_backend: StorageBackendType = StorageBackendType.MEMORY
     compression_brotli_level: int = 11
+
+    @property
+    def primitive_type(self) -> type["CloudFile[Any]"]:
+        return CloudFile
 
     @property
     def storage_metadata(self) -> S3CompatibleMetadataBase:
@@ -56,8 +59,23 @@ class CloudFieldDefinition:
             pointer_compression_brotli_level=self.compression_brotli_level,
         )
 
+    def coerce_field_value(
+        self,
+        value: Any,
+        *,
+        owner: Any,
+        field_name: str,
+    ) -> Any:
+        if isinstance(value, str):
+            return CloudFile(value).bind(
+                definition=self,
+                owner=owner,
+                field_name=field_name,
+            )
+        return value
 
-class CloudFile(str, Generic[T]):
+
+class CloudFile(str, CloudValueBase[T]):
     """
     String-backed pointer to an S3-compatible object.
 
@@ -71,9 +89,7 @@ class CloudFile(str, Generic[T]):
 
     def __new__(cls, value: str = ""):
         obj = str.__new__(cls, value)
-        obj._cloud_definition = None
-        obj._cloud_owner_ref = None
-        obj._cloud_field_name = None
+        obj._init_cloud_binding()
         return obj
 
     @classmethod
@@ -84,18 +100,6 @@ class CloudFile(str, Generic[T]):
     ) -> CoreSchema:
         string_schema = handler.generate_schema(str)
         return core_schema.no_info_after_validator_function(cls, string_schema)
-
-    def bind(
-        self,
-        *,
-        definition: CloudFieldDefinition,
-        owner: Any | None = None,
-        field_name: str | None = None,
-    ) -> "CloudFile[T]":
-        self._cloud_definition = definition
-        self._cloud_owner_ref = weakref_ref(owner) if owner is not None else None
-        self._cloud_field_name = field_name
-        return cast("CloudFile[T]", self)
 
     def _require_definition(self) -> CloudFieldDefinition:
         if self._cloud_definition is None:
@@ -269,9 +273,9 @@ def CloudField(
 
 
 def get_cloud_field_definition(field_info: FieldInfo) -> CloudFieldDefinition | None:
-    for metadata in field_info.metadata:
-        if isinstance(metadata, CloudFieldDefinition):
-            return metadata
+    definition = get_base_cloud_field_definition(field_info)
+    if isinstance(definition, CloudFieldDefinition):
+        return definition
     return None
 
 
@@ -280,26 +284,3 @@ def get_cloud_field_metadata(field_info: FieldInfo) -> S3CompatibleMetadataBase 
     if definition is None:
         return None
     return definition.storage_metadata
-
-
-def get_cloud_file_core_type(annotation: Any) -> type[Any] | None:
-    annotation_origin = get_origin(annotation)
-    if annotation_origin in (Union, types.UnionType):
-        non_null_args = [
-            arg
-            for arg in get_args(annotation)
-            if arg is not type(None)  # noqa: E721
-        ]
-        if len(non_null_args) != 1:
-            return None
-        annotation = non_null_args[0]
-        annotation_origin = get_origin(annotation)
-
-    if annotation_origin is not CloudFile:
-        return None
-
-    annotation_args = get_args(annotation)
-    if len(annotation_args) != 1 or not isinstance(annotation_args[0], type):
-        return None
-
-    return annotation_args[0]
