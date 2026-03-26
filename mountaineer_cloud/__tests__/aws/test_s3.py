@@ -10,7 +10,7 @@ from iceaxe.schemas.db_stubs import DBColumn
 from iceaxe.sql_types import ColumnType
 from pydantic import ValidationError
 
-from mountaineer_cloud.generics.storage import (
+from mountaineer_cloud.primitives.storage import (
     CloudField,
     CloudFieldDefinition,
     CloudFile,

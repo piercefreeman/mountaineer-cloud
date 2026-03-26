@@ -1,4 +1,4 @@
-from .generics import (
+from .primitives import (
     CloudField as CloudField,
     CloudFile as CloudFile,
     CloudFileModelMixin as CloudFileModelMixin,

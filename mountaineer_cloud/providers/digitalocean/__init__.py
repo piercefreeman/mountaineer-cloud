@@ -1,4 +1,4 @@
-from mountaineer_cloud.generics import (
+from mountaineer_cloud.primitives import (
     CloudField as CloudField,
     CloudFile as CloudFile,
     CloudFileModelMixin as CloudFileModelMixin,

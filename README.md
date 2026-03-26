@@ -11,7 +11,7 @@ The package is organized around three layers:
 
 - `mountaineer_cloud.providers`: provider-specific configuration, authentication, and dependency injection
 - `mountaineer_cloud.providers_common`: shared provider-side storage runtime code
-- `mountaineer_cloud.generics`: the user-facing primitives you actually use in application code
+- `mountaineer_cloud.primitives`: the user-facing primitives you actually use in application code
 
 ## Installation
 
@@ -24,7 +24,7 @@ uv add --dev "mountaineer-cloud[mocks]"
 
 ## Primitives
 
-The user-facing primitives currently live under `mountaineer_cloud.generics`.
+The user-facing primitives currently live under `mountaineer_cloud.primitives`.
 
 Today those include:
 
@@ -47,7 +47,7 @@ For storage, that means your field annotation carries the provider core type:
 from fastapi import Depends
 from iceaxe import Field, TableBase
 
-from mountaineer_cloud.generics import CloudField, CloudFile, CloudFileModelMixin
+from mountaineer_cloud.primitives import CloudField, CloudFile, CloudFileModelMixin
 from mountaineer_cloud.providers.aws import AWSCore, AWSDependencies
 
 
