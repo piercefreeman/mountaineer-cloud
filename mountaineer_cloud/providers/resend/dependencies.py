@@ -26,9 +26,7 @@ async def build_resend_core(config: ResendConfig) -> ResendCore:
 
 
 async def get_resend_core(
-    config: ResendConfig = Depends(
-        CoreDependencies.get_config_with_type(ResendConfig)
-    ),
+    config: ResendConfig = Depends(CoreDependencies.get_config_with_type(ResendConfig)),
 ):
     async for core in provider_core_dependency(
         build_core=lambda: build_resend_core(config),

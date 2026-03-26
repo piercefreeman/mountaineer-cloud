@@ -1,9 +1,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from json import dumps as json_dumps, loads as json_loads
+from json import loads as json_loads
 from typing import Any, Generic, TypeVar, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined, PydanticUndefinedType
 
@@ -62,51 +62,12 @@ class EmailMessage(BaseModel, CloudValueBase[TEmailCore], Generic[TEmailCore]):
             body=self.body,
         )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_payload(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-
-        normalized = dict(value)
-
-        if "recipient" not in normalized and "to" in normalized:
-            to_value = normalized.pop("to")
-            if isinstance(to_value, list):
-                if len(to_value) != 1:
-                    raise ValueError(
-                        "EmailMessage only supports a single `recipient`."
-                    )
-                normalized["recipient"] = to_value[0]
-            else:
-                normalized["recipient"] = to_value
-
-        if "body" not in normalized and (
-            "text" in normalized or "html" in normalized
-        ):
-            normalized["body"] = {
-                "text": normalized.pop("text", None),
-                "html": normalized.pop("html", None),
-            }
-
-        return normalized
-
     def model_post_init(self, __context: Any) -> None:
         self._init_cloud_binding()
 
     @classmethod
     def _field_factory_name(cls) -> str:
         return "CloudEmailField"
-
-
-def _serialize_email_field_for_db(value: Any):
-    if value is None:
-        return None
-
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-
-    return json_dumps(value)
 
 
 def CloudEmailField(
@@ -146,7 +107,4 @@ def CloudEmailField(
         )
 
     field_info.metadata.append(definition)
-    if hasattr(field_info, "to_db_value"):
-        field_info.to_db_value = _serialize_email_field_for_db
-
     return cast(FieldInfo, field_info)

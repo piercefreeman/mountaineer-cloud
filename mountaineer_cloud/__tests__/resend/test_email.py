@@ -74,21 +74,24 @@ async def test_resend_email_send():
 
     record = ExampleResendOutboundEmail(
         id=1,
-        email={
-            "sender": {
-                "email": "sender@example.com",
-                "display_name": "Mountaineer",
+        email=cast(
+            Any,
+            {
+                "sender": {
+                    "email": "sender@example.com",
+                    "display_name": "Mountaineer",
+                },
+                "recipient": {
+                    "email": "recipient@example.com",
+                    "display_name": "Recipient",
+                },
+                "subject": "Resend subject",
+                "body": {
+                    "text": "Plain text body",
+                    "html": "<p>HTML body</p>",
+                },
             },
-            "recipient": {
-                "email": "recipient@example.com",
-                "display_name": "Recipient",
-            },
-            "subject": "Resend subject",
-            "body": {
-                "text": "Plain text body",
-                "html": "<p>HTML body</p>",
-            },
-        },
+        ),
     )
     assert record.email is not None
 

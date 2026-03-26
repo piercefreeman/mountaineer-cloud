@@ -740,7 +740,7 @@ wheels = [
 
 [[package]]
 name = "iceaxe"
-version = "0.9.1"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asyncpg" },
@@ -748,17 +748,17 @@ dependencies = [
     { name = "pydantic" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/03/08/32f2641945ee9ba5da3a9aac358964f6c51b8482a7b5842a251147d4aa71/iceaxe-0.9.1.tar.gz", hash = "sha256:ae72b788974f2023ab4dbc75db133eea15c1d0d8fb04250925ebbd98ef48747a", size = 218785, upload-time = "2026-03-20T15:16:36.957Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/44/915c899f9171357b6d95350c40e32d295f16a13966437e83f47a23f173b8/iceaxe-0.10.0.tar.gz", hash = "sha256:29336f570c9a5b5e82514be0e1ce47099492489fb9f9c798a11c818aaad336ef", size = 219716, upload-time = "2026-03-26T21:19:03.69Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/41/79b31b5e49c1d15381672b6a7c816253f4d0555dc8309c61f4daba5dd704/iceaxe-0.9.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:b7ed263a3aab86462f67bcb551af7e5fc284ad2f9436c760ed2e93307cdd909f", size = 279834, upload-time = "2026-03-20T15:16:22.964Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/75/5e75c39a9ddbe030c56aec698c1a8240ce79bbf7308c3d403299c7834b60/iceaxe-0.9.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:c0987d80603abd148c6a8662a86953a354fbeb1a850bd6317cbddf10d48f8835", size = 283320, upload-time = "2026-03-20T15:16:24.91Z" },
-    { url = "https://files.pythonhosted.org/packages/08/da/bd9ea2c65c9c693f5232b975abd70290249bc9e88a9d01749156e92092bd/iceaxe-0.9.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:29ff04352a3bbfc6cc4706e0c8a94ef5bbb6dc6d2aab53326d3031646fe3bce8", size = 286059, upload-time = "2026-03-20T15:16:26.251Z" },
-    { url = "https://files.pythonhosted.org/packages/de/33/2e65234fa70f2c7f06f06fc15296efa4c592c523bb6edb5d912d12a2c9f1/iceaxe-0.9.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2559ce3c5f6424be725e97568e859ce62a97de9b82fca1e1bd88fc03e60500be", size = 284146, upload-time = "2026-03-20T15:16:27.728Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/38/f15d0eb432717e6c5ff3b16be15d3bb6ad483f5c85264473738fbfa36ffa/iceaxe-0.9.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0b543d211d94c458d66e2dfc8058a909a78b921a27fa174770b9aea1fca605ef", size = 287761, upload-time = "2026-03-20T15:16:29.358Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/08/b0e24b10f6acaa906507cced3f179f4dbe8b2c213ae9a07d692e8d6fd745/iceaxe-0.9.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3d57c061ae748b395b9a559925b2055471bf7d89bb66d4d1cddf783ba2e4fa67", size = 290783, upload-time = "2026-03-20T15:16:30.687Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/71/c8a022fb6ba44991be1f78ccc3f442cb5d6817289afbdc6f78efa2c469df/iceaxe-0.9.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:d3ffabfb6cb61324fd1c1a7b751876809413b2f782a3782f18cd34792a6a1fdc", size = 284081, upload-time = "2026-03-20T15:16:32.392Z" },
-    { url = "https://files.pythonhosted.org/packages/9f/33/91d6fa9cb8d035a5f552e38afe15461a728d94fca35fc5afe73c0e752371/iceaxe-0.9.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:573c4696c2870cc315ef7dc01f98a14cbf41d14b6bee69be54a4a54e3a95b5c1", size = 287763, upload-time = "2026-03-20T15:16:33.911Z" },
-    { url = "https://files.pythonhosted.org/packages/70/ec/cfaa80d025c6a1f849a6d1c7284359c4a17007b4178dff9732f198a5ee66/iceaxe-0.9.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:57f0f6484e3fadc17a1c608a581aedc450b01486e2359d3e7d31a061b0c9319a", size = 290787, upload-time = "2026-03-20T15:16:35.422Z" },
+    { url = "https://files.pythonhosted.org/packages/33/cc/6e70e5b1a672ec5a147f36858a8280c57eeb0b7cfe36aff997f1e473e13a/iceaxe-0.10.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:4f1c3de6e5c0e79d43e347ca8eeebab54dd6ff2c29221f1775e5bb2cf4978ce0", size = 280774, upload-time = "2026-03-26T21:18:50.264Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/7e/afd804f8bf4d2f53e573ea755a57f507372841c66152d9e190db06fabaac/iceaxe-0.10.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d217fc61a31045992023231b09dbad74517f191c366a7cf9e31eb649e640881c", size = 284274, upload-time = "2026-03-26T21:18:52.021Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/4d/fe156e58e964b98d3febffde91609ccf88c0b68ba7a5c8232695c9cb1a89/iceaxe-0.10.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0c450c49ae5661b9bb76e10047d174e1290ec45e34eacc57e0435340655003cd", size = 286992, upload-time = "2026-03-26T21:18:53.51Z" },
+    { url = "https://files.pythonhosted.org/packages/37/33/f8cb76a5dae2bd981c4d9ba3ba43622e364c9bcb985bda8f96c841116625/iceaxe-0.10.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:187a4059c7111548c38485e4cd20ad777bdbab2c71b7a459e23b9b3c1d596057", size = 285063, upload-time = "2026-03-26T21:18:54.746Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/03/b0366c1de948534dc06c71ab27c07e79ed65a110f66d1ee0199274432267/iceaxe-0.10.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9bd95a2289956433ae6e0a24ad05893dfdf1544af21c90036c6c94911a1f7577", size = 288662, upload-time = "2026-03-26T21:18:56.28Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/21/c023a09622c0da743d74802235872e9e8e3d0195da48048352653753687b/iceaxe-0.10.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:dc09dfbb6e38a1efe50a8a5cfa5a0f30bb843f9fe44a567a679350e3fa63c141", size = 291674, upload-time = "2026-03-26T21:18:57.605Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/c3/31d4a750148b85697c19cc0fa693a15e037c15d3587e36cbd252b3b19b31/iceaxe-0.10.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:98bf4d96145aa5474daec22db3847553e99a92117ab4f23d1ff76bdfcecd3415", size = 285062, upload-time = "2026-03-26T21:18:59.468Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/c7/22ee35a44697c4510ecb9db1cf38db52cf3ba7e8cea299f040024f566632/iceaxe-0.10.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:74b49a7ffcfb08edf33ffbab404c0b607794ee29b99fb1d3c9883f33f00760e4", size = 288661, upload-time = "2026-03-26T21:19:01.069Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/16/fe82eddf0978978bc17a02430c84ec1f92f03187ccd9468fd61a6fdf2e85/iceaxe-0.10.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d5d3e58fbafc8a4d6ae5bc30e6eba47705b5f2c600db3cd73a69dd36cb5a2ae2", size = 291724, upload-time = "2026-03-26T21:19:02.448Z" },
 ]
 
 [[package]]
@@ -1120,7 +1120,7 @@ provides-extras = ["mocks"]
 [package.metadata.requires-dev]
 dev = [
     { name = "brotli", specifier = ">=1.1.0" },
-    { name = "iceaxe", specifier = ">=0.9.1" },
+    { name = "iceaxe", specifier = ">=0.10.0" },
     { name = "moto", extras = ["all", "server"], specifier = ">=5.0.0" },
     { name = "mountaineer", specifier = ">=0.10.0.dev2" },
     { name = "pytest", specifier = ">=8.0.2" },

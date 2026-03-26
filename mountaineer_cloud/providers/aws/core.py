@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mountaineer_cloud.providers_common.email import (
     EmailBody,
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from types_aiobotocore_ses.client import SESClient
+    from types_aiobotocore_ses.type_defs import SendEmailResponseTypeDef
 
 _session_manager = S3SessionManager[AWSConfig](url_scheme="s3")
 
@@ -58,7 +59,7 @@ class AWSCore(
             }
 
         async with self.get_email_client() as ses:
-            response: dict[str, Any] = await ses.send_email(
+            response: SendEmailResponseTypeDef = await ses.send_email(
                 Source=sender.formatted,
                 Destination={"ToAddresses": [recipient.email]},
                 Message={

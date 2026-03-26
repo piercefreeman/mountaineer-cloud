@@ -65,35 +65,24 @@ def test_cloudemail_field_definition_is_runtime_only():
 
     email = ExampleAWSOutboundEmail(
         id=1,
-        email={
-            "sender": {"email": "sender@example.com"},
-            "recipient": {"email": "recipient@example.com"},
-            "subject": "Hello",
-            "body": {"text": "Plain text"},
-        },
+        email=cast(
+            Any,
+            {
+                "sender": {"email": "sender@example.com"},
+                "recipient": {"email": "recipient@example.com"},
+                "subject": "Hello",
+                "body": {"text": "Plain text"},
+            },
+        ),
     ).email
     assert email is not None
     assert email._cloud_definition is not None
     assert email._cloud_definition == definition
     assert email._cloud_field_name == "email"
 
-    serialized = field.to_db_value(email)
-    assert '"subject": "Hello"' in serialized
-    assert '"recipient"' in serialized
-
-
-def test_emailmessage_legacy_shape_is_supported():
-    email = EmailMessage[AWSCore].model_validate(
-        {
-            "sender": {"email": "sender@example.com"},
-            "to": [{"email": "recipient@example.com"}],
-            "subject": "Legacy",
-            "text": "Plain text",
-        }
-    )
-
-    assert email.recipient.email == "recipient@example.com"
-    assert email.body.text == "Plain text"
+    dumped = ExampleAWSOutboundEmail(id=1, email=email).model_dump(mode="json")
+    assert dumped["email"]["subject"] == "Hello"
+    assert dumped["email"]["recipient"]["email"] == "recipient@example.com"
 
 
 @pytest.mark.asyncio
@@ -102,9 +91,7 @@ async def test_ses_email_send(
     aws_core: AWSCore,
 ):
     await mock_aws.mock_ses.verify_email_identity(EmailAddress="sender@example.com")
-    await mock_aws.mock_ses.verify_email_identity(
-        EmailAddress="recipient@example.com"
-    )
+    await mock_aws.mock_ses.verify_email_identity(EmailAddress="recipient@example.com")
 
     message_id = await aws_core.email_send(
         sender=EmailRecipient(
@@ -128,23 +115,24 @@ async def test_emailmessage_send_with_bound_iceaxe_field(
     aws_core: AWSCore,
 ):
     await mock_aws.mock_ses.verify_email_identity(EmailAddress="sender@example.com")
-    await mock_aws.mock_ses.verify_email_identity(
-        EmailAddress="recipient@example.com"
-    )
+    await mock_aws.mock_ses.verify_email_identity(EmailAddress="recipient@example.com")
 
     record = ExampleAWSOutboundEmail(
         id=1,
-        email={
-            "sender": {
-                "email": "sender@example.com",
-                "display_name": "Mountaineer",
+        email=cast(
+            Any,
+            {
+                "sender": {
+                    "email": "sender@example.com",
+                    "display_name": "Mountaineer",
+                },
+                "recipient": {"email": "recipient@example.com"},
+                "subject": "Bound email",
+                "body": {
+                    "text": "Bound body",
+                },
             },
-            "recipient": {"email": "recipient@example.com"},
-            "subject": "Bound email",
-            "body": {
-                "text": "Bound body",
-            },
-        },
+        ),
     )
     assert record.email is not None
 

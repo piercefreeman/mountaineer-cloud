@@ -27,9 +27,7 @@ class EmailBody(BaseModel):
     @model_validator(mode="after")
     def validate_body(self):
         if self.text is None and self.html is None:
-            raise ValueError(
-                "EmailBody requires at least one of `text` or `html`."
-            )
+            raise ValueError("EmailBody requires at least one of `text` or `html`.")
         return self
 
 
