@@ -1,0 +1,62 @@
+[project]
+name = "mountaineer-cloud"
+version = "0.1.0"
+description = ""
+authors = [
+    { name = "Pierce Freeman", email = "pierce@freeman.vc" },
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic-settings>=2.2.1",
+    "aioboto3>=14.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.9.0",
+    "ruff>=0.3.1",
+    "pyright>=1.1.353",
+    "pytest>=8.0.2",
+    "pytest-asyncio>=0.23.5.post1",
+    "types-aioboto3[full]>=12.3.0",
+    "moto[all,server]>=5.0.0",
+    "brotli>=1.1.0",
+    "mountaineer>=0.10.0.dev2",
+]
+
+[project.optional-dependencies]
+mocks = [
+    "moto[all,server]>=5.0.0",
+    "types-aiobotocore[full]>=2.20.0",
+]
+
+#[tool.uv.sources]
+#mountaineer = { path = "../../mountaineer", editable = true }
+
+[tool.ruff.lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "mountaineer",
+    "first-party",
+    "local-folder",
+]
+combine-as-imports = true
+
+[tool.ruff.lint.isort.sections]
+mountaineer = ["mountaineer"]
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+# Disable print statements
+select = ["E4", "E7", "E9", "F", "I001", "T201"]
+
+[[tool.mypy.overrides]]
+module = "brotli.*"
+ignore_missing_imports = true
