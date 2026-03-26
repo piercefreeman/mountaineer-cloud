@@ -3,8 +3,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mountaineer_cloud.aws.config import AWSConfig
-from mountaineer_cloud.aws.dependencies.core import (
+from mountaineer_cloud.providers.aws import AWSConfig, AWSCore
+from mountaineer_cloud.providers.aws.dependencies import (
+    GLOBAL_SESSIONS,
+    build_aws_core,
+    get_aws_core,
     get_aws_session,
     is_session_valid,
 )
@@ -38,7 +41,7 @@ def test_is_session_valid(minutes_difference, expected):
 @pytest.mark.asyncio
 async def test_get_aws_session(mock_app_config):
     with patch(
-        "mountaineer_cloud.aws.dependencies.core.CoreDependencies.get_config_with_type"
+        "mountaineer_cloud.providers.aws.dependencies.CoreDependencies.get_config_with_type"
     ) as mock_get_config:
         mock_get_config.return_value = lambda: mock_app_config
 
@@ -90,9 +93,6 @@ async def test_get_aws_session(mock_app_config):
                 "region_name": mock_app_config.AWS_REGION_NAME,
             }
 
-            # Check that the global state is set for future use
-            from mountaineer_cloud.aws.dependencies.core import GLOBAL_SESSIONS
-
             session_payload = GLOBAL_SESSIONS.get_obj()
             assert session_payload is not None
             global_session, session_expiration = session_payload
@@ -100,3 +100,37 @@ async def test_get_aws_session(mock_app_config):
             assert global_session is not None
             assert session_expiration is not None
             assert session_expiration > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_build_aws_core(mock_app_config):
+    with patch(
+        "mountaineer_cloud.providers.aws.dependencies.get_aws_session",
+        new=AsyncMock(return_value=MagicMock()),
+    ) as mock_get_session:
+        core = await build_aws_core(mock_app_config)
+
+    assert isinstance(core, AWSCore)
+    assert core.config == mock_app_config
+    assert core.session is not None
+    mock_get_session.assert_awaited_once_with(mock_app_config)
+
+
+@pytest.mark.asyncio
+async def test_get_aws_core(mock_app_config):
+    with patch(
+        "mountaineer_cloud.providers.aws.dependencies.build_aws_core",
+        new=AsyncMock(
+            return_value=AWSCore(
+                config=mock_app_config,
+                session=MagicMock(),
+            )
+        ),
+    ):
+        generator = get_aws_core(mock_app_config)
+        core = await anext(generator)
+
+    assert isinstance(core, AWSCore)
+    assert core.config == mock_app_config
+
+    await generator.aclose()
