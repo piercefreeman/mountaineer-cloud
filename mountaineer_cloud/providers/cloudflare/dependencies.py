@@ -10,12 +10,12 @@ from fastapi import Depends
 from mountaineer import CoreDependencies
 from mountaineer.cache import AsyncLoopObjectCache
 
+from mountaineer_cloud.providers.base import provider_core_dependency
 from mountaineer_cloud.providers_common.s3_compat import (
     build_s3_session_expiration,
     create_s3_session,
     get_cached_s3_session,
     is_session_valid as shared_is_session_valid,
-    provider_core_dependency,
 )
 
 from .config import CloudflareConfig

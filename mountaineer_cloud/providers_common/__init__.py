@@ -1,3 +1,8 @@
+from .email import (
+    EmailBody as EmailBody,
+    EmailProviderCore as EmailProviderCore,
+    EmailRecipient as EmailRecipient,
+)
 from .s3_compat import (
     COMPRESSION_TO_EXTENSION as COMPRESSION_TO_EXTENSION,
     S3CompatibleMetadataBase as S3CompatibleMetadataBase,

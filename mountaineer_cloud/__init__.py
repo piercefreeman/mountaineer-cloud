@@ -1,8 +1,10 @@
 from .mixin import CloudMixin as CloudMixin
 from .primitives import (
+    CloudEmailField as CloudEmailField,
     CloudFile as CloudFile,
     CloudFileField as CloudFileField,
     CompressionType as CompressionType,
+    EmailBody as EmailBody,
     EmailMessage as EmailMessage,
     EmailRecipient as EmailRecipient,
     StorageBackendType as StorageBackendType,
@@ -21,4 +23,9 @@ from .providers.digitalocean import (
     DigitalOceanConfig as DigitalOceanConfig,
     DigitalOceanCore as DigitalOceanCore,
     DigitalOceanDependencies as DigitalOceanDependencies,
+)
+from .providers.resend import (
+    ResendConfig as ResendConfig,
+    ResendCore as ResendCore,
+    ResendDependencies as ResendDependencies,
 )

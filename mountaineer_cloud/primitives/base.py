@@ -154,6 +154,17 @@ def get_cloud_primitive_type(annotation: Any) -> type[CloudValueBase[Any]] | Non
     if annotation is None:
         return None
 
+    if isinstance(annotation, type) and issubclass(annotation, CloudValueBase):
+        generic_metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
+        if isinstance(generic_metadata, dict):
+            annotation_origin = generic_metadata.get("origin")
+            if isinstance(annotation_origin, type) and issubclass(
+                annotation_origin, CloudValueBase
+            ):
+                return cast(type[CloudValueBase[Any]], annotation_origin)
+
+        return cast(type[CloudValueBase[Any]], annotation)
+
     annotation_origin = get_origin(annotation)
     if not isinstance(annotation_origin, type):
         return None
@@ -186,6 +197,11 @@ def get_cloud_core_type(annotation: Any) -> type[Any] | None:
         return None
 
     annotation_args = get_args(annotation)
+    if not annotation_args and isinstance(annotation, type):
+        generic_metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
+        if isinstance(generic_metadata, dict):
+            annotation_args = generic_metadata.get("args", ())
+
     if len(annotation_args) != 1 or not isinstance(annotation_args[0], type):
         return None
 
