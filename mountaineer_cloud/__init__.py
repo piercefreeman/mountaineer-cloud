@@ -1,7 +1,7 @@
 from .mixin import CloudMixin as CloudMixin
 from .primitives import (
-    CloudField as CloudField,
     CloudFile as CloudFile,
+    CloudFileField as CloudFileField,
     CompressionType as CompressionType,
     EmailMessage as EmailMessage,
     EmailRecipient as EmailRecipient,

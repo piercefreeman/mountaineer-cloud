@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
 from mountaineer_cloud.providers_common.s3_compat import (
+    S3CompatibleStorageCore,
     S3SessionManager,
-    StorageProviderCore,
 )
 
 from .config import CloudflareConfig
@@ -15,5 +15,5 @@ _session_manager = S3SessionManager[CloudflareConfig](
 
 
 @dataclass
-class CloudflareCore(StorageProviderCore[CloudflareConfig]):
+class CloudflareCore(S3CompatibleStorageCore[CloudflareConfig]):
     s3_session_manager = _session_manager

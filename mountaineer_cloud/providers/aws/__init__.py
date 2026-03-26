@@ -1,7 +1,7 @@
 from mountaineer_cloud.mixin import CloudMixin as CloudMixin
 from mountaineer_cloud.primitives import (
-    CloudField as CloudField,
     CloudFile as CloudFile,
+    CloudFileField as CloudFileField,
     CompressionType as CompressionType,
     StorageBackendType as StorageBackendType,
 )

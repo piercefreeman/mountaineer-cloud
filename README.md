@@ -29,7 +29,7 @@ The user-facing primitives currently live under `mountaineer_cloud.primitives`.
 Today those include:
 
 - `CloudFile`
-- `CloudField`
+- `CloudFileField`
 - `CloudMixin`
 - `EmailMessage`
 - `EmailRecipient`
@@ -47,13 +47,13 @@ from fastapi import Depends
 from iceaxe import Field, TableBase
 
 from mountaineer_cloud import CloudMixin
-from mountaineer_cloud.primitives import CloudField, CloudFile
+from mountaineer_cloud.primitives import CloudFile, CloudFileField
 from mountaineer_cloud.providers.aws import AWSCore, AWSDependencies
 
 
 class Asset(CloudMixin, TableBase):
     id: int = Field(primary_key=True)
-    file_url: CloudFile[AWSCore] | None = CloudField(
+    file_url: CloudFile[AWSCore] | None = CloudFileField(
         bucket="my-bucket",
         prefix="assets",
     )
@@ -198,7 +198,7 @@ async def endpoint(
 
 `CloudFile` is intentionally a string-backed type so it still stores cleanly in ORMs like Iceaxe, while also carrying the methods needed to read and write remote content.
 
-`CloudField(...)` defines the storage configuration for the pointer itself:
+`CloudFileField(...)` defines the storage configuration for the pointer itself:
 
 - `bucket`
 - `prefix`
@@ -206,4 +206,4 @@ async def endpoint(
 - `compression`
 - `storage_backend`
 
-`CloudMixin` is the model-side glue that binds those field definitions back onto runtime values. It exists because `CloudField(...)` is instantiated in global scope, before the field has access to the resolved model type hint or the eventual model instance via `self`.
+`CloudMixin` is the model-side glue that binds those field definitions back onto runtime values. It exists because `CloudFileField(...)` is instantiated in global scope, before the field has access to the resolved model type hint or the eventual model instance via `self`.

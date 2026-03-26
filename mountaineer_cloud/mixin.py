@@ -15,18 +15,20 @@ class CloudMixin:
     Binds cloud field definitions back onto runtime field values.
 
     This mixin is required because cloud field configuration is declared in
-    global scope via `Field(...)` or `CloudField(...)`. At that point the field
-    object has no access to the resolved type-hinted field type, the eventual
-    model class, or the model instance via `self`. We patch that gap after
-    model construction and on attribute assignment so bound values like
-    `CloudFile[...]` can still resolve their per-field configuration correctly.
+    global scope via `Field(...)` or a cloud-aware field factory such as
+    `CloudFileField(...)`. At that point the field object has no access to
+    the resolved type-hinted field type, the eventual model class, or the
+    model instance via `self`. We patch that gap after model construction and
+    on attribute assignment so bound values like `CloudFile[...]` can still
+    resolve their per-field configuration correctly.
     """
 
     @model_validator(mode="after")
     def _bind_cloud_fields(self):
         """
-        After a model has been constructed, bind any `CloudField(...)` values defined at the class-level
-        into the hydrated instances of the primitives themselves (like `CloudFile[...]`).
+        After a model has been constructed, bind any cloud-aware field values
+        defined at the class level into the hydrated primitive instances
+        themselves, such as `CloudFile[...]`.
 
         """
         model_fields = cast(
@@ -63,7 +65,7 @@ class CloudMixin:
         value: Any,
         field_info: FieldInfo,
     ) -> Any:
-        # Make sure this field has actually set their metadata via CloudField()
+        # Make sure this field has actually declared cloud-specific metadata.
         definition = get_cloud_field_definition(field_info)
         if definition is None or value is None:
             return value

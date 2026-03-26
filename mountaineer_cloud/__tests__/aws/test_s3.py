@@ -13,9 +13,9 @@ from pydantic import ValidationError
 
 from mountaineer_cloud.mixin import CloudMixin
 from mountaineer_cloud.primitives.storage import (
-    CloudField,
-    CloudFieldDefinition,
     CloudFile,
+    CloudFileField,
+    CloudFileFieldDefinition,
     CompressionType,
     StorageBackendType,
     get_cloud_field_definition,
@@ -73,7 +73,7 @@ class ExampleAWSAsset(CloudMixin, TableBase):
     id: int = IceaxeField(primary_key=True)
     file_url: CloudFile[AWSCore] | None = cast(
         Any,
-        CloudField(
+        CloudFileField(
             bucket="mountaineer-test",
             prefix="test-prefix",
         ),
@@ -142,9 +142,7 @@ def test_invalid_compression_type(
 
 
 @pytest.mark.asyncio
-async def test_s3_upload(
-    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
-):
+async def test_s3_upload(mock_aws: MockAWS, aws_core: AWSCore):
     """
     Ensure that we can properly upload and download data to S3. This test does not
     need to be fully parameterized with the different encoding and storage options
@@ -152,28 +150,24 @@ async def test_s3_upload(
 
     """
 
-    ExampleAWSPointer.s3_object_metadata = S3Metadata(
+    metadata = S3Metadata(
         bucket="mountaineer-test",
         prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
         pointer_storage_backend=StorageBackendType.MEMORY,
     )
 
-    stub_obj = ExampleAWSPointer()
-
     with patch(
         "mountaineer_cloud.providers_common.s3_compat.uuid4",
         return_value="test-uuid",
     ):
-        await stub_obj.put_content_into_pointer(
+        stored_path = await aws_core.storage_write(
+            path=None,
+            metadata=metadata,
             payload=io.BytesIO(b"test data"),
-            session=aws_core.session,
-            config=mock_app_config,
         )
 
-    # We have retained the passed-in properties and added our s3 path
-    # to the appropriate attribute
-    assert stub_obj.s3_object_path == "s3://mountaineer-test/test-prefix/test-uuid"
+    assert stored_path == "s3://mountaineer-test/test-prefix/test-uuid"
 
     # Make sure we have actually written this path to S3
     obj = await mock_aws.mock_s3.get_object(
@@ -184,10 +178,8 @@ async def test_s3_upload(
 
 
 @pytest.mark.asyncio
-async def test_s3_download(
-    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
-):
-    ExampleAWSPointer.s3_object_metadata = S3Metadata(
+async def test_s3_download(mock_aws: MockAWS, aws_core: AWSCore):
+    metadata = S3Metadata(
         bucket="mountaineer-test",
         prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
@@ -201,38 +193,32 @@ async def test_s3_download(
         Body=b"test data",
     )
 
-    stub_obj = ExampleAWSPointer(
-        s3_object_path="s3://mountaineer-test/test-prefix/test-uuid"
-    )
-
     # Make sure we can download the file
-    async with stub_obj.get_contents_from_pointer(
-        session=aws_core.session,
-        config=mock_app_config,
+    async with aws_core.storage_read(
+        path="s3://mountaineer-test/test-prefix/test-uuid",
+        metadata=metadata,
     ) as file:
         assert file.read() == b"test data"
 
 
 @pytest.mark.asyncio
-async def test_explicit_s3_key(
-    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
-):
-    ExampleAWSPointer.s3_object_metadata = S3Metadata(
+async def test_explicit_s3_key(mock_aws: MockAWS, aws_core: AWSCore):
+    metadata = S3Metadata(
         bucket="mountaineer-test",
         prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
         pointer_storage_backend=StorageBackendType.MEMORY,
     )
 
-    stub_obj = ExampleAWSPointer()
-
     # Manually upload a file to S3 and create the database object
-    await stub_obj.put_content_into_pointer(
+    stored_path = await aws_core.storage_write(
+        path=None,
+        metadata=metadata,
         payload=io.BytesIO(b"test data"),
-        explicit_s3_path="s3://mountaineer-test/test-prefix/test-uuid",
-        session=aws_core.session,
-        config=mock_app_config,
+        explicit_storage_path="s3://mountaineer-test/test-prefix/test-uuid",
     )
+
+    assert stored_path == "s3://mountaineer-test/test-prefix/test-uuid"
 
     # Get the file from where we expect in S3
     obj = await mock_aws.mock_s3.get_object(
@@ -254,18 +240,18 @@ def test_cloudfile_iceaxe_column_type():
     assert file_column.nullable is True
 
 
-def test_cloudfield_requires_keyword_arguments():
-    cloud_field = cast(Any, CloudField)
+def test_cloudfilefield_requires_keyword_arguments():
+    cloud_file_field = cast(Any, CloudFileField)
     with pytest.raises(TypeError):
-        cloud_field("mountaineer-test", "test-prefix")
+        cloud_file_field("mountaineer-test", "test-prefix")
 
 
-def test_cloudfield_definition_is_runtime_only():
+def test_cloudfilefield_definition_is_runtime_only():
     field = ExampleAWSAsset.model_fields["file_url"]
     definition = get_cloud_field_definition(field)
 
     assert field.json_schema_extra is None
-    assert isinstance(definition, CloudFieldDefinition)
+    assert isinstance(definition, CloudFileFieldDefinition)
     assert definition.bucket == "mountaineer-test"
     assert definition.prefix == "test-prefix"
 

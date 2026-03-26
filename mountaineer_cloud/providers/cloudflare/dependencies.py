@@ -11,10 +11,8 @@ from fastapi import Depends
 from mountaineer import CoreDependencies
 from mountaineer.cache import AsyncLoopObjectCache
 
-from mountaineer_cloud.providers_common.s3_compat import register_cloud_backend
-
 from .config import CloudflareConfig
-from .core import CloudflareCore, _session_manager
+from .core import CloudflareCore
 
 GLOBAL_SESSIONS = AsyncLoopObjectCache[tuple[aioboto3.Session, datetime]]()
 
@@ -75,10 +73,3 @@ async def get_cloudflare_core(
 def is_session_valid(expiration: datetime | None) -> bool:
     current_time = datetime.now(timezone.utc)
     return expiration is not None and current_time < expiration - timedelta(minutes=5)
-
-
-register_cloud_backend(
-    CloudflareConfig,
-    session_manager=_session_manager,
-    session_factory=get_r2_session,
-)

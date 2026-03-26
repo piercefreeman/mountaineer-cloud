@@ -21,22 +21,22 @@ from pydantic_core import (
 from mountaineer_cloud.primitives.base import (
     CloudFieldDefinitionBase,
     CloudValueBase,
-    get_cloud_field_definition as get_base_cloud_field_definition,
+    get_cloud_field_definition as get_cloud_field_definition,
 )
-from mountaineer_cloud.providers_common.s3_compat import (
-    CloudRuntime,
+from mountaineer_cloud.providers_common.storage import (
     CompressionType,
-    S3CompatibleMetadataBase,
-    S3CompatiblePointerBase,
     StorageBackendType,
-    resolve_cloud_runtime,
+    StorageMetadata,
+    StorageProviderCore,
 )
 
-T = TypeVar("T")
+TStorageCore = TypeVar("TStorageCore", bound=StorageProviderCore[Any])
 
 
 @dataclass(frozen=True)
-class CloudFieldDefinition(CloudFieldDefinitionBase):
+class CloudFileFieldDefinition(CloudFieldDefinitionBase):
+    field_factory_name = "CloudFileField"
+
     bucket: str
     prefix: str = ""
     suffix: str = ""
@@ -49,8 +49,8 @@ class CloudFieldDefinition(CloudFieldDefinitionBase):
         return CloudFile
 
     @property
-    def storage_metadata(self) -> S3CompatibleMetadataBase:
-        return S3CompatibleMetadataBase(
+    def storage_metadata(self) -> StorageMetadata:
+        return StorageMetadata(
             bucket=self.bucket,
             prefix=self.prefix,
             suffix=self.suffix,
@@ -75,7 +75,7 @@ class CloudFieldDefinition(CloudFieldDefinitionBase):
         return value
 
 
-class CloudFile(str, CloudValueBase[T]):
+class CloudFile(str, CloudValueBase[TStorageCore]):
     """
     String-backed pointer to an S3-compatible object.
 
@@ -83,9 +83,83 @@ class CloudFile(str, CloudValueBase[T]):
     instances also know how to upload and download their own content.
     """
 
-    _cloud_definition: CloudFieldDefinition | None
+    _cloud_definition: CloudFileFieldDefinition | None
     _cloud_owner_ref: Any | None
     _cloud_field_name: str | None
+
+    async def put_content(
+        self,
+        core: TStorageCore,
+        content: bytes,
+        *,
+        content_type: str | None = None,
+        explicit_s3_path: str | None = None,
+    ) -> "CloudFile[TStorageCore]":
+        return await self.put_fileobj(
+            core,
+            BytesIO(content),
+            content_type=content_type,
+            explicit_s3_path=explicit_s3_path,
+        )
+
+    async def put_fileobj(
+        self,
+        core: TStorageCore,
+        payload: IO[bytes],
+        *,
+        content_type: str | None = None,
+        explicit_s3_path: str | None = None,
+    ) -> "CloudFile[TStorageCore]":
+        definition = self._require_definition()
+        stored_path = await core.storage_write(
+            path=str(self) or None,
+            metadata=definition.storage_metadata,
+            payload=payload,
+            content_type=content_type,
+            explicit_storage_path=explicit_s3_path,
+        )
+
+        return self._apply_new_value(stored_path)
+
+    async def copy_content(
+        self,
+        core: TStorageCore,
+        payload: IO[bytes],
+        *,
+        extension: str,
+        content_type: str | None = None,
+        explicit_s3_path: str | None = None,
+    ) -> "CloudFile[TStorageCore]":
+        definition = self._require_definition()
+        stored_path = await core.storage_write(
+            path=str(self) or None,
+            metadata=definition.storage_metadata,
+            payload=payload,
+            extension=extension,
+            content_type=content_type,
+            explicit_storage_path=explicit_s3_path,
+            compress_payload=False,
+        )
+
+        return self._apply_new_value(stored_path)
+
+    @asynccontextmanager
+    async def get_contents(self, core: TStorageCore):
+        definition = self._require_definition()
+        async with core.storage_read(
+            path=str(self) or None,
+            metadata=definition.storage_metadata,
+        ) as file:
+            yield file
+
+    async def get_content(self, core: TStorageCore) -> bytes:
+        async with self.get_contents(core) as file:
+            return file.read()
+
+    #
+    # Coerce from the string base class that's actually stored within the database
+    # level varchar column into the CloudFile primitive.
+    #
 
     def __new__(cls, value: str = ""):
         obj = str.__new__(cls, value)
@@ -101,11 +175,11 @@ class CloudFile(str, CloudValueBase[T]):
         string_schema = handler.generate_schema(str)
         return core_schema.no_info_after_validator_function(cls, string_schema)
 
-    def _require_definition(self) -> CloudFieldDefinition:
+    def _require_definition(self) -> CloudFileFieldDefinition:
         if self._cloud_definition is None:
             raise ValueError(
-                "CloudFile is not bound to a CloudField definition. "
-                "Use it inside a model field declared with `CloudField(...)`."
+                "CloudFile is not bound to a CloudFileField definition. "
+                "Use it inside a model field declared with `CloudFileField(...)`."
             )
         return self._cloud_definition
 
@@ -114,7 +188,7 @@ class CloudFile(str, CloudValueBase[T]):
             return None
         return self._cloud_owner_ref()
 
-    def _clone_with_value(self, value: str) -> "CloudFile[T]":
+    def _clone_with_value(self, value: str) -> "CloudFile[TStorageCore]":
         definition = self._require_definition()
         cloned = type(self)(value)
         return cloned.bind(
@@ -123,103 +197,25 @@ class CloudFile(str, CloudValueBase[T]):
             field_name=self._cloud_field_name,
         )
 
-    def _apply_new_value(self, value: str) -> "CloudFile[T]":
+    def _apply_new_value(self, value: str) -> "CloudFile[TStorageCore]":
         next_value = self._clone_with_value(value)
 
         owner = self._get_owner()
         if owner is not None and self._cloud_field_name is not None:
             setattr(owner, self._cloud_field_name, next_value)
-            return cast("CloudFile[T]", getattr(owner, self._cloud_field_name))
+            return cast(
+                "CloudFile[TStorageCore]",
+                getattr(owner, self._cloud_field_name),
+            )
 
         return next_value
 
-    def _build_pointer(
-        self, runtime: CloudRuntime[Any]
-    ) -> S3CompatiblePointerBase[Any]:
-        definition = self._require_definition()
-
-        class BoundPointer(S3CompatiblePointerBase[Any]):
-            s3_object_metadata = definition.storage_metadata
-            s3_session_manager = runtime.session_manager
-
-        return BoundPointer(s3_object_path=str(self) or None)
-
-    async def put_content(
-        self,
-        core: T,
-        content: bytes,
-        *,
-        content_type: str | None = None,
-        explicit_s3_path: str | None = None,
-    ) -> "CloudFile[T]":
-        return await self.put_fileobj(
-            core,
-            BytesIO(content),
-            content_type=content_type,
-            explicit_s3_path=explicit_s3_path,
-        )
-
-    async def put_fileobj(
-        self,
-        core: T,
-        payload: IO[bytes],
-        *,
-        content_type: str | None = None,
-        explicit_s3_path: str | None = None,
-    ) -> "CloudFile[T]":
-        runtime = await resolve_cloud_runtime(core)
-        pointer = self._build_pointer(runtime)
-
-        await pointer.put_content_into_pointer(
-            payload=payload,
-            content_type=content_type,
-            explicit_s3_path=explicit_s3_path,
-            session=runtime.session,
-            config=runtime.config,
-        )
-
-        return self._apply_new_value(pointer.s3_object_path or "")
-
-    async def copy_content(
-        self,
-        core: T,
-        payload: IO[bytes],
-        *,
-        extension: str,
-        content_type: str | None = None,
-        explicit_s3_path: str | None = None,
-    ) -> "CloudFile[T]":
-        runtime = await resolve_cloud_runtime(core)
-        pointer = self._build_pointer(runtime)
-
-        await pointer.copy_content_into_pointer(
-            payload=payload,
-            extension=extension,
-            content_type=content_type,
-            explicit_s3_path=explicit_s3_path,
-            session=runtime.session,
-            config=runtime.config,
-        )
-
-        return self._apply_new_value(pointer.s3_object_path or "")
-
-    @asynccontextmanager
-    async def get_contents(self, core: T):
-        runtime = await resolve_cloud_runtime(core)
-        pointer = self._build_pointer(runtime)
-
-        async with pointer.get_contents_from_pointer(
-            session=runtime.session,
-            config=runtime.config,
-        ) as file:
-            yield file
-
-    async def get_content(self, core: T) -> bytes:
-        async with self.get_contents(core) as file:
-            return file.read()
+    @classmethod
+    def _field_factory_name(cls) -> str:
+        return "CloudFileField"
 
 
-def CloudField(
+def CloudFileField(
     *,
     bucket: str,
     prefix: str = "",
@@ -233,10 +229,28 @@ def CloudField(
     | PydanticUndefinedType = PydanticUndefined,
     **kwargs: Any,
 ) -> FieldInfo:
+    """
+    Declare a `CloudFile[CoreType]` model field and attach its storage config.
+
+    Runtime behavior:
+    - `bucket`, `prefix`, and `suffix` define where generated object keys live.
+      When a bound `CloudFile` uploads content, these values shape the final
+      object path.
+    - `compression` controls how bytes are encoded before upload and decoded on
+      readback.
+    - `storage_backend` controls whether temporary payload handling uses memory
+      or disk while the provider runtime processes the file.
+    - `compression_brotli_level` only affects Brotli compression quality when
+      `compression=CompressionType.BROTLI`.
+    - `default` and `default_factory` behave like normal Pydantic or Iceaxe
+      field defaults for the stored string value.
+    - `**kwargs` are forwarded to the underlying `Field(...)` or Iceaxe
+      `Field(...)` call for normal schema and ORM configuration.
+    """
     field_factory = Field
 
     if bucket is None:
-        raise ValueError("CloudField requires a `bucket` value.")
+        raise ValueError("CloudFileField requires a `bucket` value.")
 
     try:
         from iceaxe import Field as IceaxeField
@@ -248,7 +262,7 @@ def CloudField(
         if "explicit_type" not in kwargs:
             kwargs["explicit_type"] = ColumnType.VARCHAR
 
-    definition = CloudFieldDefinition(
+    definition = CloudFileFieldDefinition(
         bucket=bucket,
         prefix=prefix,
         suffix=suffix,
@@ -270,17 +284,3 @@ def CloudField(
 
     field_info.metadata.append(definition)
     return field_info
-
-
-def get_cloud_field_definition(field_info: FieldInfo) -> CloudFieldDefinition | None:
-    definition = get_base_cloud_field_definition(field_info)
-    if isinstance(definition, CloudFieldDefinition):
-        return definition
-    return None
-
-
-def get_cloud_field_metadata(field_info: FieldInfo) -> S3CompatibleMetadataBase | None:
-    definition = get_cloud_field_definition(field_info)
-    if definition is None:
-        return None
-    return definition.storage_metadata

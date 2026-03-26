@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
 from mountaineer_cloud.providers_common.s3_compat import (
+    S3CompatibleStorageCore,
     S3SessionManager,
-    StorageProviderCore,
 )
 
 from .config import DigitalOceanConfig
@@ -15,5 +15,5 @@ _session_manager = S3SessionManager[DigitalOceanConfig](
 
 
 @dataclass
-class DigitalOceanCore(StorageProviderCore[DigitalOceanConfig]):
+class DigitalOceanCore(S3CompatibleStorageCore[DigitalOceanConfig]):
     s3_session_manager = _session_manager

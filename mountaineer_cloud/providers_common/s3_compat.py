@@ -1,9 +1,8 @@
 import gzip
 from abc import ABC
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from enum import Enum
 from io import BytesIO
 from logging import error
 from tempfile import TemporaryFile
@@ -15,7 +14,12 @@ import aioboto3
 from botocore.exceptions import ClientError
 from pydantic import BaseModel
 
-from mountaineer_cloud.providers.base import ProviderCore
+from mountaineer_cloud.providers_common.storage import (
+    CompressionType,
+    StorageBackendType,
+    StorageMetadata,
+    StorageProviderCore,
+)
 
 if TYPE_CHECKING:
     import brotli
@@ -31,17 +35,6 @@ except ImportError:
     BROTLI_AVAILABLE = False
 
 
-class CompressionType(Enum):
-    RAW = "RAW"
-    BROTLI = "BROTLI"
-    GZIP = "GZIP"
-
-
-class StorageBackendType(Enum):
-    DISK = "DISK"
-    MEMORY = "MEMORY"
-
-
 COMPRESSION_TO_EXTENSION = {
     CompressionType.RAW: "",
     CompressionType.BROTLI: ".br",
@@ -55,25 +48,12 @@ def get_brotli():
     raise ImportError("Brotli is not available. Install it with `pip install brotli`")
 
 
-class S3CompatibleMetadataBase(BaseModel):
-    pointer_compression: CompressionType = CompressionType.RAW
-    pointer_storage_backend: StorageBackendType = StorageBackendType.MEMORY
-
-    # If using brotli compression, override the default level of compression
-    # to balance compression speed and compression ratio
-    pointer_compression_brotli_level: int = 11
-
-    # Object path prefix
-    # If you need a dynamic override you can also make a @property of
-    # your child class
-    # The suffix is usually the type of file
-    bucket: str
-    prefix: str = ""
-    suffix: str = ""
+class S3CompatibleMetadataBase(StorageMetadata):
+    pass
 
 
-T = TypeVar("T")
 TConfig = TypeVar("TConfig")
+T = TypeVar("T")
 
 
 @dataclass
@@ -101,7 +81,7 @@ class S3SessionManager(Generic[T]):
 
     def make_url(
         self,
-        metadata: S3CompatibleMetadataBase,
+        metadata: StorageMetadata,
         *,
         extension: str,
         explicit_s3_path: str | None = None,
@@ -114,55 +94,20 @@ class S3SessionManager(Generic[T]):
         )
 
 
-CloudSessionFactory = Callable[[T], Awaitable[aioboto3.Session]]
-
-
-@dataclass(frozen=True)
-class S3CompatibleBackend(Generic[T]):
-    session_manager: S3SessionManager[T]
-    session_factory: CloudSessionFactory[T]
-
-
-CLOUD_BACKEND_REGISTRY: dict[type[Any], S3CompatibleBackend[Any]] = {}
-
-
-def register_cloud_backend(
-    core_type: type[T],
-    *,
-    session_manager: S3SessionManager[T],
-    session_factory: CloudSessionFactory[T],
-):
-    CLOUD_BACKEND_REGISTRY[core_type] = S3CompatibleBackend(
-        session_manager=session_manager,
-        session_factory=session_factory,
-    )
-
-
-def resolve_cloud_backend(core_type: type[Any]) -> S3CompatibleBackend[Any]:
-    for candidate_type in core_type.__mro__:
-        if candidate_type in CLOUD_BACKEND_REGISTRY:
-            return CLOUD_BACKEND_REGISTRY[candidate_type]
-
-    raise ValueError(
-        f"No cloud backend registered for {core_type.__name__}. "
-        "Register it with `register_cloud_backend(...)`."
-    )
-
-
-class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
+class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], ABC):
     s3_session_manager: ClassVar[S3SessionManager[Any]]
 
     def make_storage_url(
         self,
-        metadata: S3CompatibleMetadataBase,
+        metadata: StorageMetadata,
         *,
         extension: str,
-        explicit_s3_path: str | None = None,
+        explicit_storage_path: str | None = None,
     ) -> str:
         return self.s3_session_manager.make_url(
             metadata,
             extension=extension,
-            explicit_s3_path=explicit_s3_path,
+            explicit_s3_path=explicit_storage_path,
         )
 
     @asynccontextmanager
@@ -172,28 +117,78 @@ class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
         ) as client:
             yield client
 
+    @asynccontextmanager
+    async def storage_read(
+        self,
+        *,
+        path: str | None,
+        metadata: StorageMetadata,
+    ):
+        pointer = self._build_storage_pointer(path=path, metadata=metadata)
+        async with pointer.get_contents_from_pointer(
+            session=self.session,
+            config=self.config,
+        ) as file:
+            yield file
 
-@dataclass(frozen=True)
-class CloudRuntime(Generic[T]):
-    session_manager: S3SessionManager[T]
-    session: aioboto3.Session
-    config: T
+    async def storage_write(
+        self,
+        *,
+        path: str | None,
+        metadata: StorageMetadata,
+        payload: IO[bytes],
+        content_type: str | None = None,
+        explicit_storage_path: str | None = None,
+        extension: str | None = None,
+        compress_payload: bool = True,
+    ) -> str:
+        pointer = self._build_storage_pointer(path=path, metadata=metadata)
+
+        if compress_payload:
+            await pointer.put_content_into_pointer(
+                payload=payload,
+                content_type=content_type,
+                explicit_s3_path=explicit_storage_path,
+                session=self.session,
+                config=self.config,
+            )
+        else:
+            if extension is None:
+                raise ValueError(
+                    "storage_write requires an `extension` when "
+                    "`compress_payload=False`."
+                )
+            await pointer.copy_content_into_pointer(
+                payload=payload,
+                extension=extension,
+                content_type=content_type,
+                explicit_s3_path=explicit_storage_path,
+                session=self.session,
+                config=self.config,
+            )
+
+        return pointer.s3_object_path or ""
+
+    def _build_storage_pointer(
+        self,
+        *,
+        path: str | None,
+        metadata: StorageMetadata,
+    ) -> "S3CompatiblePointerBase[Any]":
+        s3_metadata = _coerce_s3_metadata(metadata)
+
+        class BoundPointer(S3CompatiblePointerBase[Any]):
+            s3_object_metadata = s3_metadata
+            s3_session_manager = self.s3_session_manager
+
+        return BoundPointer(s3_object_path=path)
 
 
-async def resolve_cloud_runtime(core: Any) -> CloudRuntime[Any]:
-    if isinstance(core, StorageProviderCore):
-        return CloudRuntime(
-            session_manager=core.s3_session_manager,
-            session=core.session,
-            config=core.config,
-        )
+def _coerce_s3_metadata(metadata: StorageMetadata) -> S3CompatibleMetadataBase:
+    if isinstance(metadata, S3CompatibleMetadataBase):
+        return metadata
 
-    backend = resolve_cloud_backend(type(core))
-    return CloudRuntime(
-        session_manager=backend.session_manager,
-        session=await backend.session_factory(core),
-        config=core,
-    )
+    return S3CompatibleMetadataBase.model_validate(metadata.model_dump(mode="json"))
 
 
 class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):

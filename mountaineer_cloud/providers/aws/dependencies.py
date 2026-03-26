@@ -11,10 +11,8 @@ from fastapi import Depends
 from mountaineer import CoreDependencies
 from mountaineer.cache import AsyncLoopObjectCache
 
-from mountaineer_cloud.providers_common.s3_compat import register_cloud_backend
-
 from .config import AWSConfig
-from .core import AWSCore, _session_manager
+from .core import AWSCore
 
 GLOBAL_SESSIONS = AsyncLoopObjectCache[tuple[aioboto3.Session, datetime]]()
 
@@ -95,10 +93,3 @@ async def get_aws_core(
 def is_session_valid(expiration: datetime | None):
     current_time = datetime.now(timezone.utc)
     return expiration is not None and current_time < expiration - timedelta(minutes=5)
-
-
-register_cloud_backend(
-    AWSConfig,
-    session_manager=_session_manager,
-    session_factory=get_aws_session,
-)
