@@ -1,5 +1,6 @@
 import io
 from itertools import product
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -70,9 +71,12 @@ ExampleAWSPointer.s3_session_manager = AWSCore.s3_session_manager
 
 class ExampleAWSAsset(CloudMixin, TableBase):
     id: int = IceaxeField(primary_key=True)
-    file_url: CloudFile[AWSCore] | None = CloudField(
-        bucket="mountaineer-test",
-        prefix="test-prefix",
+    file_url: CloudFile[AWSCore] | None = cast(
+        Any,
+        CloudField(
+            bucket="mountaineer-test",
+            prefix="test-prefix",
+        ),
     )
 
 
@@ -251,8 +255,9 @@ def test_cloudfile_iceaxe_column_type():
 
 
 def test_cloudfield_requires_keyword_arguments():
+    cloud_field = cast(Any, CloudField)
     with pytest.raises(TypeError):
-        CloudField("mountaineer-test", "test-prefix")
+        cloud_field("mountaineer-test", "test-prefix")
 
 
 def test_cloudfield_definition_is_runtime_only():
@@ -264,7 +269,8 @@ def test_cloudfield_definition_is_runtime_only():
     assert definition.bucket == "mountaineer-test"
     assert definition.prefix == "test-prefix"
 
-    asset = ExampleAWSAsset(id=1, file_url="")
+    asset = ExampleAWSAsset(id=1, file_url=CloudFile(""))
+    assert asset.file_url is not None
 
     assert asset.file_url._cloud_definition is not None
     assert asset.file_url._cloud_definition == definition
@@ -275,7 +281,8 @@ async def test_cloudfile_in_iceaxe_model(
     mock_aws: MockAWS,
     aws_core: AWSCore,
 ):
-    asset = ExampleAWSAsset(id=1, file_url="")
+    asset = ExampleAWSAsset(id=1, file_url=CloudFile(""))
+    assert asset.file_url is not None
 
     assert isinstance(asset.file_url, CloudFile)
 

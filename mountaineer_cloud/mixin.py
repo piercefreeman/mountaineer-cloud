@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from pydantic import model_validator
 from pydantic.fields import FieldInfo
@@ -12,21 +12,27 @@ from mountaineer_cloud.primitives.storage import (
 
 class CloudMixin:
     """
-    Required mixin for any Iceaxe model that uses `CloudField(...)`.
-
     Binds cloud field definitions back onto runtime field values.
 
     This mixin is required because cloud field configuration is declared in
     global scope via `Field(...)` or `CloudField(...)`. At that point the field
-    object does not know the eventual model class, the resolved type hint, or
-    the model instance via `self`. We patch that gap after model construction
-    and on attribute assignment so bound values like `CloudFile[...]` can still
-    resolve their per-field configuration correctly.
+    object has no access to the resolved type-hinted field type, the eventual
+    model class, or the model instance via `self`. We patch that gap after
+    model construction and on attribute assignment so bound values like
+    `CloudFile[...]` can still resolve their per-field configuration correctly.
     """
 
     @model_validator(mode="after")
     def _bind_cloud_fields(self):
-        for field_name, field_info in self.__class__.model_fields.items():
+        """
+        After a model has been constructed, bind any `CloudField(...)` values defined at the class-level
+        into the hydrated instances of the primitives themselves (like `CloudFile[...]`).
+
+        """
+        model_fields = cast(
+            dict[str, FieldInfo], getattr(type(self), "model_fields", {})
+        )
+        for field_name, field_info in model_fields.items():
             bound_value = self._bind_cloud_value(
                 field_name,
                 getattr(self, field_name),
@@ -37,7 +43,9 @@ class CloudMixin:
         return self
 
     def __setattr__(self, name: str, value: Any) -> None:
-        model_fields = getattr(self.__class__, "model_fields", {})
+        model_fields = cast(
+            dict[str, FieldInfo], getattr(type(self), "model_fields", {})
+        )
         if name in model_fields:
             value = self._bind_cloud_value(name, value, model_fields[name])
         super().__setattr__(name, value)

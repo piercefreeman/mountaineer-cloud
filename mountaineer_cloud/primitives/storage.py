@@ -17,7 +17,12 @@ from weakref import ref as weakref_ref
 
 from pydantic import Field, GetCoreSchemaHandler
 from pydantic.fields import FieldInfo
-from pydantic_core import CoreSchema, PydanticUndefined, core_schema
+from pydantic_core import (
+    CoreSchema,
+    PydanticUndefined,
+    PydanticUndefinedType,
+    core_schema,
+)
 
 from mountaineer_cloud.providers_common.s3_compat import (
     CloudRuntime,
@@ -219,7 +224,9 @@ def CloudField(
     storage_backend: StorageBackendType = StorageBackendType.MEMORY,
     compression_brotli_level: int = 11,
     default: Any = None,
-    default_factory: Callable[[], Any] | None = PydanticUndefined,
+    default_factory: Callable[[], Any]
+    | None
+    | PydanticUndefinedType = PydanticUndefined,
     **kwargs: Any,
 ) -> FieldInfo:
     field_factory = Field

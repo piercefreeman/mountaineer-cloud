@@ -150,7 +150,7 @@ def resolve_cloud_backend(core_type: type[Any]) -> S3CompatibleBackend[Any]:
 
 
 class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
-    s3_session_manager: ClassVar[S3SessionManager[TConfig]]
+    s3_session_manager: ClassVar[S3SessionManager[Any]]
 
     def make_storage_url(
         self,
