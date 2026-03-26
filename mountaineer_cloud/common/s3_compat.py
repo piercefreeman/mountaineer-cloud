@@ -1,10 +1,8 @@
 import gzip
-from abc import ABC, abstractmethod
-from contextlib import (
-    AbstractAsyncContextManager as AsyncContextManager,
-    asynccontextmanager,
-    contextmanager,
-)
+from abc import ABC
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
 from logging import error
@@ -12,11 +10,13 @@ from tempfile import TemporaryFile
 from typing import (
     IO,
     TYPE_CHECKING,
+    Any,
     ClassVar,
     Generic,
     TypeVar,
 )
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import aioboto3
 from botocore.exceptions import ClientError
@@ -84,6 +84,41 @@ class S3CompatibleMetadataBase(BaseModel):
 T = TypeVar("T", bound=BaseSettings)
 
 
+@dataclass
+class S3SessionManager(Generic[T]):
+    """
+    Captures the provider-specific details for S3-compatible storage backends.
+    Instantiate one per provider and delegate get_client/make_url to it.
+    """
+
+    url_scheme: str
+    endpoint_url: Callable[[T], str] | None = None
+    region_name: Callable[[T], str] | None = None
+
+    @asynccontextmanager
+    async def get_client(
+        self, session: aioboto3.Session, config: T
+    ) -> AsyncGenerator["S3Client", None]:
+        kwargs: dict[str, Any] = {}
+        if self.endpoint_url is not None:
+            kwargs["endpoint_url"] = self.endpoint_url(config)
+        if self.region_name is not None:
+            kwargs["region_name"] = self.region_name(config)
+        async with session.client("s3", **kwargs) as client:
+            yield client
+
+    def make_url(
+        self,
+        metadata: S3CompatibleMetadataBase,
+        *,
+        extension: str,
+        explicit_s3_path: str | None = None,
+    ) -> str:
+        if explicit_s3_path:
+            return explicit_s3_path
+        return f"{self.url_scheme}://{metadata.key_bucket}/{metadata.key_prefix}/{uuid4()}{extension}"
+
+
 class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
     """
     Core class to implement S3-compatible pointer functionality. Multiple hosts (S3, B2, R2) provide
@@ -94,16 +129,23 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
 
     s3_object_path: str | None = None
     s3_object_metadata: ClassVar[S3CompatibleMetadataBase]
+    s3_session_manager: ClassVar[S3SessionManager[Any]]
 
-    @abstractmethod
     def make_url(
         self, *, extension: str, explicit_s3_path: str | None = None, config: T
-    ) -> str: ...
+    ) -> str:
+        return self.s3_session_manager.make_url(
+            self.s3_object_metadata,
+            extension=extension,
+            explicit_s3_path=explicit_s3_path,
+        )
 
-    @abstractmethod
+    @asynccontextmanager
     async def get_client(
         self, session: aioboto3.Session, config: T
-    ) -> AsyncContextManager["S3Client"]: ...
+    ) -> AsyncGenerator["S3Client", None]:
+        async with self.s3_session_manager.get_client(session, config) as client:
+            yield client
 
     @asynccontextmanager
     async def get_contents_from_pointer(self, *, session: aioboto3.Session, config: T):

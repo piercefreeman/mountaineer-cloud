@@ -1,11 +1,7 @@
-from contextlib import asynccontextmanager
-from uuid import uuid4
-
-import aioboto3
-
 from mountaineer_cloud.common.s3_compat import (
     S3CompatibleMetadataBase,
     S3CompatiblePointerBase,
+    S3SessionManager,
 )
 
 from .config import AWSConfig
@@ -13,6 +9,9 @@ from .config import AWSConfig
 
 class S3Metadata(S3CompatibleMetadataBase):
     pass
+
+
+_session_manager = S3SessionManager[AWSConfig](url_scheme="s3")
 
 
 class S3PointerMixin(S3CompatiblePointerBase[AWSConfig]):
@@ -23,16 +22,4 @@ class S3PointerMixin(S3CompatiblePointerBase[AWSConfig]):
 
     """
 
-    def make_url(
-        self, *, extension: str, explicit_s3_path: str | None = None, config: AWSConfig
-    ) -> str:
-        return (
-            f"s3://{self.s3_object_metadata.key_bucket}/{self.s3_object_metadata.key_prefix}/{uuid4()}{extension}"
-            if not explicit_s3_path
-            else explicit_s3_path
-        )
-
-    @asynccontextmanager
-    async def get_client(self, session: aioboto3.Session, config: AWSConfig):
-        async with session.client("s3") as client:
-            yield client
+    s3_session_manager = _session_manager

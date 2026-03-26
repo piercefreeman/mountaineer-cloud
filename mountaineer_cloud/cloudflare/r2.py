@@ -1,11 +1,7 @@
-from contextlib import asynccontextmanager
-from uuid import uuid4
-
-import aioboto3
-
 from mountaineer_cloud.common.s3_compat import (
     S3CompatibleMetadataBase,
     S3CompatiblePointerBase,
+    S3SessionManager,
 )
 
 from .config import CloudflareConfig
@@ -13,6 +9,13 @@ from .config import CloudflareConfig
 
 class R2Metadata(S3CompatibleMetadataBase):
     pass
+
+
+_session_manager = S3SessionManager[CloudflareConfig](
+    url_scheme="r2",
+    endpoint_url=lambda c: f"https://{c.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    region_name=lambda _: "auto",
+)
 
 
 class R2PointerMixin(S3CompatiblePointerBase[CloudflareConfig]):
@@ -23,28 +26,4 @@ class R2PointerMixin(S3CompatiblePointerBase[CloudflareConfig]):
 
     """
 
-    def make_url(
-        self,
-        *,
-        extension: str,
-        explicit_s3_path: str | None = None,
-        config: CloudflareConfig,
-    ) -> str:
-        return (
-            f"r2://{self.s3_object_metadata.key_bucket}/{self.s3_object_metadata.key_prefix}/{uuid4()}{extension}"
-            if not explicit_s3_path
-            else explicit_s3_path
-        )
-
-    @asynccontextmanager
-    async def get_client(self, session: aioboto3.Session, config: CloudflareConfig):
-        # R2 endpoint URL format: https://<account_id>.r2.cloudflarestorage.com
-        endpoint_url = f"https://{config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-
-        async with session.client(
-            "s3",
-            endpoint_url=endpoint_url,
-            # R2 doesn't use AWS regions, but boto3 requires one
-            region_name="auto",
-        ) as client:
-            yield client
+    s3_session_manager = _session_manager
