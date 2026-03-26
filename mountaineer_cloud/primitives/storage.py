@@ -15,7 +15,7 @@ from typing import (
 )
 from weakref import ref as weakref_ref
 
-from pydantic import Field, GetCoreSchemaHandler, model_validator
+from pydantic import Field, GetCoreSchemaHandler
 from pydantic.fields import FieldInfo
 from pydantic_core import CoreSchema, PydanticUndefined, core_schema
 
@@ -33,12 +33,23 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class CloudFieldDefinition:
-    metadata: S3CompatibleMetadataBase
+    bucket: str
+    prefix: str = ""
+    suffix: str = ""
+    compression: CompressionType = CompressionType.RAW
+    storage_backend: StorageBackendType = StorageBackendType.MEMORY
+    compression_brotli_level: int = 11
 
-
-@dataclass(frozen=True)
-class CloudFileBinding(Generic[T]):
-    definition: CloudFieldDefinition
+    @property
+    def storage_metadata(self) -> S3CompatibleMetadataBase:
+        return S3CompatibleMetadataBase(
+            bucket=self.bucket,
+            prefix=self.prefix,
+            suffix=self.suffix,
+            pointer_compression=self.compression,
+            pointer_storage_backend=self.storage_backend,
+            pointer_compression_brotli_level=self.compression_brotli_level,
+        )
 
 
 class CloudFile(str, Generic[T]):
@@ -49,13 +60,13 @@ class CloudFile(str, Generic[T]):
     instances also know how to upload and download their own content.
     """
 
-    _cloud_binding: CloudFileBinding[Any] | None
+    _cloud_definition: CloudFieldDefinition | None
     _cloud_owner_ref: Any | None
     _cloud_field_name: str | None
 
     def __new__(cls, value: str = ""):
         obj = str.__new__(cls, value)
-        obj._cloud_binding = None
+        obj._cloud_definition = None
         obj._cloud_owner_ref = None
         obj._cloud_field_name = None
         return obj
@@ -76,18 +87,18 @@ class CloudFile(str, Generic[T]):
         owner: Any | None = None,
         field_name: str | None = None,
     ) -> "CloudFile[T]":
-        self._cloud_binding = CloudFileBinding(definition=definition)
+        self._cloud_definition = definition
         self._cloud_owner_ref = weakref_ref(owner) if owner is not None else None
         self._cloud_field_name = field_name
         return cast("CloudFile[T]", self)
 
-    def _require_binding(self) -> CloudFileBinding[T]:
-        if self._cloud_binding is None:
+    def _require_definition(self) -> CloudFieldDefinition:
+        if self._cloud_definition is None:
             raise ValueError(
                 "CloudFile is not bound to a CloudField definition. "
                 "Use it inside a model field declared with `CloudField(...)`."
             )
-        return cast("CloudFileBinding[T]", self._cloud_binding)
+        return self._cloud_definition
 
     def _get_owner(self):
         if self._cloud_owner_ref is None:
@@ -95,10 +106,10 @@ class CloudFile(str, Generic[T]):
         return self._cloud_owner_ref()
 
     def _clone_with_value(self, value: str) -> "CloudFile[T]":
-        binding = self._require_binding()
+        definition = self._require_definition()
         cloned = type(self)(value)
         return cloned.bind(
-            definition=binding.definition,
+            definition=definition,
             owner=self._get_owner(),
             field_name=self._cloud_field_name,
         )
@@ -113,11 +124,13 @@ class CloudFile(str, Generic[T]):
 
         return next_value
 
-    def _build_pointer(self, runtime: CloudRuntime[Any]) -> S3CompatiblePointerBase[Any]:
-        binding = self._require_binding()
+    def _build_pointer(
+        self, runtime: CloudRuntime[Any]
+    ) -> S3CompatiblePointerBase[Any]:
+        definition = self._require_definition()
 
         class BoundPointer(S3CompatiblePointerBase[Any]):
-            s3_object_metadata = binding.definition.metadata
+            s3_object_metadata = definition.storage_metadata
             s3_session_manager = runtime.session_manager
 
         return BoundPointer(s3_object_path=str(self) or None)
@@ -196,14 +209,12 @@ class CloudFile(str, Generic[T]):
         async with self.get_contents(core) as file:
             return file.read()
 
+
 def CloudField(
     *,
-    bucket: str | None = None,
+    bucket: str,
     prefix: str = "",
     suffix: str = "",
-    key_bucket: str | None = None,
-    key_prefix: str | None = None,
-    key_suffix: str | None = None,
     compression: CompressionType = CompressionType.RAW,
     storage_backend: StorageBackendType = StorageBackendType.MEMORY,
     compression_brotli_level: int = 11,
@@ -211,13 +222,10 @@ def CloudField(
     default_factory: Callable[[], Any] | None = PydanticUndefined,
     **kwargs: Any,
 ) -> FieldInfo:
-    resolved_bucket = key_bucket if key_bucket is not None else bucket
-    resolved_prefix = key_prefix if key_prefix is not None else prefix
-    resolved_suffix = key_suffix if key_suffix is not None else suffix
     field_factory = Field
 
-    if resolved_bucket is None:
-        raise ValueError("CloudField requires a `bucket` or `key_bucket` value.")
+    if bucket is None:
+        raise ValueError("CloudField requires a `bucket` value.")
 
     try:
         from iceaxe import Field as IceaxeField
@@ -230,14 +238,12 @@ def CloudField(
             kwargs["explicit_type"] = ColumnType.VARCHAR
 
     definition = CloudFieldDefinition(
-        metadata=S3CompatibleMetadataBase(
-            key_bucket=resolved_bucket,
-            key_prefix=resolved_prefix,
-            key_suffix=resolved_suffix,
-            pointer_compression=compression,
-            pointer_storage_backend=storage_backend,
-            pointer_compression_brotli_level=compression_brotli_level,
-        )
+        bucket=bucket,
+        prefix=prefix,
+        suffix=suffix,
+        compression=compression,
+        storage_backend=storage_backend,
+        compression_brotli_level=compression_brotli_level,
     )
 
     if default_factory is not PydanticUndefined:
@@ -245,13 +251,12 @@ def CloudField(
             default_factory=default_factory,
             **kwargs,
         )
-        field_info.metadata.append(definition)
-        return field_info
+    else:
+        field_info = field_factory(
+            default=default,
+            **kwargs,
+        )
 
-    field_info = field_factory(
-        default=default,
-        **kwargs,
-    )
     field_info.metadata.append(definition)
     return field_info
 
@@ -267,14 +272,16 @@ def get_cloud_field_metadata(field_info: FieldInfo) -> S3CompatibleMetadataBase 
     definition = get_cloud_field_definition(field_info)
     if definition is None:
         return None
-    return definition.metadata
+    return definition.storage_metadata
 
 
 def get_cloud_file_core_type(annotation: Any) -> type[Any] | None:
     annotation_origin = get_origin(annotation)
     if annotation_origin in (Union, types.UnionType):
         non_null_args = [
-            arg for arg in get_args(annotation) if arg is not type(None)  # noqa: E721
+            arg
+            for arg in get_args(annotation)
+            if arg is not type(None)  # noqa: E721
         ]
         if len(non_null_args) != 1:
             return None
@@ -289,55 +296,3 @@ def get_cloud_file_core_type(annotation: Any) -> type[Any] | None:
         return None
 
     return annotation_args[0]
-
-
-class CloudFileModelMixin:
-    @model_validator(mode="after")
-    def _bind_cloud_file_fields(self):
-        for field_name, field_info in self.__class__.model_fields.items():
-            bound_value = self._bind_cloud_file_value(
-                field_name,
-                getattr(self, field_name),
-                field_info,
-            )
-            if bound_value is not getattr(self, field_name):
-                object.__setattr__(self, field_name, bound_value)
-        return self
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        model_fields = getattr(self.__class__, "model_fields", {})
-        if name in model_fields:
-            value = self._bind_cloud_file_value(name, value, model_fields[name])
-        super().__setattr__(name, value)
-
-    def _bind_cloud_file_value(
-        self,
-        field_name: str,
-        value: Any,
-        field_info: FieldInfo,
-    ) -> Any:
-        definition = get_cloud_field_definition(field_info)
-        if definition is None or value is None:
-            return value
-
-        if get_cloud_file_core_type(field_info.annotation) is None:
-            raise ValueError(
-                f"{self.__class__.__name__}.{field_name} uses CloudField(...) "
-                "but is not annotated as CloudFile[CoreType]."
-            )
-
-        if isinstance(value, CloudFile):
-            return value.bind(
-                definition=definition,
-                owner=self,
-                field_name=field_name,
-            )
-
-        if isinstance(value, str):
-            return CloudFile(value).bind(
-                definition=definition,
-                owner=self,
-                field_name=field_name,
-            )
-
-        return value

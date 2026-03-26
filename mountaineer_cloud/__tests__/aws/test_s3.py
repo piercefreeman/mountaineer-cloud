@@ -10,11 +10,11 @@ from iceaxe.schemas.db_stubs import DBColumn
 from iceaxe.sql_types import ColumnType
 from pydantic import ValidationError
 
+from mountaineer_cloud.mixin import CloudMixin
 from mountaineer_cloud.primitives.storage import (
     CloudField,
     CloudFieldDefinition,
     CloudFile,
-    CloudFileModelMixin,
     CompressionType,
     StorageBackendType,
     get_cloud_field_definition,
@@ -68,7 +68,7 @@ class ExampleAWSPointer(S3CompatiblePointerBase[AWSConfig]):
 ExampleAWSPointer.s3_session_manager = AWSCore.s3_session_manager
 
 
-class ExampleAWSAsset(CloudFileModelMixin, TableBase):
+class ExampleAWSAsset(CloudMixin, TableBase):
     id: int = IceaxeField(primary_key=True)
     file_url: CloudFile[AWSCore] | None = CloudField(
         bucket="mountaineer-test",
@@ -102,8 +102,8 @@ def test_compression_decompression(
     original_data = b"x" * data_size
 
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
-        key_bucket="mountaineer-test",
-        key_prefix="test-prefix",
+        bucket="mountaineer-test",
+        prefix="test-prefix",
         pointer_compression=compression_type,
         pointer_storage_backend=backend_type,
     )
@@ -130,8 +130,8 @@ def test_invalid_compression_type(
 ):
     with pytest.raises(ValidationError):
         S3Metadata(
-            key_bucket="mountaineer-test",
-            key_prefix="test-prefix",
+            bucket="mountaineer-test",
+            prefix="test-prefix",
             pointer_compression=invalid_compression_type,
             pointer_storage_backend=StorageBackendType.DISK,
         )
@@ -149,8 +149,8 @@ async def test_s3_upload(
     """
 
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
-        key_bucket="mountaineer-test",
-        key_prefix="test-prefix",
+        bucket="mountaineer-test",
+        prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
         pointer_storage_backend=StorageBackendType.MEMORY,
     )
@@ -184,8 +184,8 @@ async def test_s3_download(
     mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
 ):
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
-        key_bucket="mountaineer-test",
-        key_prefix="test-prefix",
+        bucket="mountaineer-test",
+        prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
         pointer_storage_backend=StorageBackendType.MEMORY,
     )
@@ -214,8 +214,8 @@ async def test_explicit_s3_key(
     mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
 ):
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
-        key_bucket="mountaineer-test",
-        key_prefix="test-prefix",
+        bucket="mountaineer-test",
+        prefix="test-prefix",
         pointer_compression=CompressionType.RAW,
         pointer_storage_backend=StorageBackendType.MEMORY,
     )
@@ -261,13 +261,13 @@ def test_cloudfield_definition_is_runtime_only():
 
     assert field.json_schema_extra is None
     assert isinstance(definition, CloudFieldDefinition)
-    assert definition.metadata.key_bucket == "mountaineer-test"
-    assert definition.metadata.key_prefix == "test-prefix"
+    assert definition.bucket == "mountaineer-test"
+    assert definition.prefix == "test-prefix"
 
     asset = ExampleAWSAsset(id=1, file_url="")
 
-    assert asset.file_url._cloud_binding is not None
-    assert asset.file_url._cloud_binding.definition == definition
+    assert asset.file_url._cloud_definition is not None
+    assert asset.file_url._cloud_definition == definition
 
 
 @pytest.mark.asyncio

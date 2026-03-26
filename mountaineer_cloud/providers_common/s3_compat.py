@@ -52,9 +52,7 @@ COMPRESSION_TO_EXTENSION = {
 def get_brotli():
     if BROTLI_AVAILABLE:
         return brotli
-    raise ImportError(
-        "Brotli is not available. Install it with `pip install brotli`"
-    )
+    raise ImportError("Brotli is not available. Install it with `pip install brotli`")
 
 
 class S3CompatibleMetadataBase(BaseModel):
@@ -65,13 +63,13 @@ class S3CompatibleMetadataBase(BaseModel):
     # to balance compression speed and compression ratio
     pointer_compression_brotli_level: int = 11
 
-    # Key prefix
+    # Object path prefix
     # If you need a dynamic override you can also make a @property of
     # your child class
-    # The key suffix is usually the type of file
-    key_bucket: str
-    key_prefix: str = ""
-    key_suffix: str = ""
+    # The suffix is usually the type of file
+    bucket: str
+    prefix: str = ""
+    suffix: str = ""
 
 
 T = TypeVar("T")
@@ -111,8 +109,8 @@ class S3SessionManager(Generic[T]):
         if explicit_s3_path:
             return explicit_s3_path
         return (
-            f"{self.url_scheme}://{metadata.key_bucket}/"
-            f"{metadata.key_prefix}/{uuid4()}{extension}"
+            f"{self.url_scheme}://{metadata.bucket}/"
+            f"{metadata.prefix}/{uuid4()}{extension}"
         )
 
 
@@ -169,7 +167,9 @@ class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
 
     @asynccontextmanager
     async def get_storage_client(self):
-        async with self.s3_session_manager.get_client(self.session, self.config) as client:
+        async with self.s3_session_manager.get_client(
+            self.session, self.config
+        ) as client:
             yield client
 
 
@@ -262,7 +262,7 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
     ):
         with self.wrap_compressed_file(payload) as compressed_payload:
             compressed_extension = (
-                self.s3_object_metadata.key_suffix
+                self.s3_object_metadata.suffix
                 + COMPRESSION_TO_EXTENSION[self.s3_object_metadata.pointer_compression]
             )
 

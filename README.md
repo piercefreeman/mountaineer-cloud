@@ -30,8 +30,7 @@ Today those include:
 
 - `CloudFile`
 - `CloudField`
-- `CloudFileModelMixin`
-
+- `CloudMixin`
 - `EmailMessage`
 - `EmailRecipient`
 
@@ -47,11 +46,12 @@ For storage, that means your field annotation carries the provider core type:
 from fastapi import Depends
 from iceaxe import Field, TableBase
 
-from mountaineer_cloud.primitives import CloudField, CloudFile, CloudFileModelMixin
+from mountaineer_cloud import CloudMixin
+from mountaineer_cloud.primitives import CloudField, CloudFile
 from mountaineer_cloud.providers.aws import AWSCore, AWSDependencies
 
 
-class Asset(CloudFileModelMixin, TableBase):
+class Asset(CloudMixin, TableBase):
     id: int = Field(primary_key=True)
     file_url: CloudFile[AWSCore] | None = CloudField(
         bucket="my-bucket",
@@ -205,3 +205,5 @@ async def endpoint(
 - `suffix`
 - `compression`
 - `storage_backend`
+
+`CloudMixin` is the model-side glue that binds those field definitions back onto runtime values. It exists because `CloudField(...)` is instantiated in global scope, before the field has access to the resolved model type hint or the eventual model instance via `self`.
