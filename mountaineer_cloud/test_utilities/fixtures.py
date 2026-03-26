@@ -14,11 +14,10 @@ async def get_mock_aws(
     whitelisted_buckets: list[str] | None = None,
 ) -> AsyncIterator[MockAWS]:
     """
-    Main entry point for getting a MockAWS instance. This maintains backwards compatibility
-    with the original interface while using moto under the hood.
+    Main entry point for getting a MockAWS instance backed by moto.
 
-    The whitelisted_buckets parameter is kept for backwards compatibility but is no longer used
-    since moto handles all bucket operations safely.
+    If provided, `whitelisted_buckets` are created up front so tests can rely on
+    those buckets existing immediately.
     """
     server = MotoServerManager()
 

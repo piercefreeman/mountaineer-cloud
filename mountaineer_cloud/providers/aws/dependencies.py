@@ -1,6 +1,5 @@
 """
 Utilities to control permission grants for AWS roles.
-
 """
 
 from datetime import datetime, timedelta, timezone
@@ -12,7 +11,10 @@ from fastapi import Depends
 from mountaineer import CoreDependencies
 from mountaineer.cache import AsyncLoopObjectCache
 
-from mountaineer_cloud.aws.config import AWSConfig
+from mountaineer_cloud.providers_common.s3_compat import register_cloud_backend
+
+from .config import AWSConfig
+from .core import AWSCore, _session_manager
 
 GLOBAL_SESSIONS = AsyncLoopObjectCache[tuple[aioboto3.Session, datetime]]()
 
@@ -30,9 +32,7 @@ async def get_aws_session(
     By convention, we assume that backend services will only want one valid sessions
     to AWS at a time. We cache it globally until expiration to save us from having
     to do the round-trip of reauthentication on each request.
-
     """
-    # First, non-blocking check for session validity
     existing_metadata = GLOBAL_SESSIONS.get_obj()
     if existing_metadata:
         session, expiration = existing_metadata
@@ -40,8 +40,6 @@ async def get_aws_session(
             return session
 
     async with GLOBAL_SESSIONS.get_lock():
-        # Re-check the session validity in case it got updated while
-        # waiting for the lock
         existing_metadata = GLOBAL_SESSIONS.get_obj()
         if existing_metadata:
             session, expiration = existing_metadata
@@ -77,6 +75,30 @@ async def get_aws_session(
         return session
 
 
+async def build_aws_core(config: AWSConfig) -> AWSCore:
+    return AWSCore(
+        config=config,
+        session=await get_aws_session(config),
+    )
+
+
+async def get_aws_core(
+    config: AWSConfig = Depends(CoreDependencies.get_config_with_type(AWSConfig)),
+):
+    core = await build_aws_core(config)
+    try:
+        yield core
+    finally:
+        await core.aclose()
+
+
 def is_session_valid(expiration: datetime | None):
     current_time = datetime.now(timezone.utc)
     return expiration is not None and current_time < expiration - timedelta(minutes=5)
+
+
+register_cloud_backend(
+    AWSConfig,
+    session_manager=_session_manager,
+    session_factory=get_aws_session,
+)

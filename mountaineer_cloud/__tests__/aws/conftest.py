@@ -3,7 +3,7 @@ import pytest
 from mountaineer import ConfigBase
 from mountaineer.config import unregister_config
 
-from mountaineer_cloud.aws.config import AWSConfig
+from mountaineer_cloud.providers.aws import AWSConfig
 
 
 @pytest.fixture

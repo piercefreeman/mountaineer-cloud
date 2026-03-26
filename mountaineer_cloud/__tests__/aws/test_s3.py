@@ -2,16 +2,28 @@ import io
 from itertools import product
 from unittest.mock import patch
 
-import aioboto3
 import pytest
 import pytest_asyncio
+from iceaxe import Field as IceaxeField, TableBase
+from iceaxe.schemas.db_memory_serializer import DatabaseHandler
+from iceaxe.schemas.db_stubs import DBColumn
+from iceaxe.sql_types import ColumnType
 from pydantic import ValidationError
 
-from mountaineer_cloud.aws import AWSDependencies, CompressionType, StorageBackendType
-from mountaineer_cloud.aws.config import AWSConfig
-from mountaineer_cloud.aws.s3 import (
-    S3Metadata,
-    S3PointerMixin,
+from mountaineer_cloud.generics.storage import (
+    CloudField,
+    CloudFieldDefinition,
+    CloudFile,
+    CloudFileModelMixin,
+    CompressionType,
+    StorageBackendType,
+    get_cloud_field_definition,
+)
+from mountaineer_cloud.providers.aws import AWSConfig, AWSCore
+from mountaineer_cloud.providers.aws.dependencies import build_aws_core
+from mountaineer_cloud.providers_common.s3_compat import (
+    S3CompatibleMetadataBase,
+    S3CompatiblePointerBase,
 )
 from mountaineer_cloud.test_utilities import MockAWS
 from mountaineer_cloud.test_utilities.fixtures import get_mock_aws
@@ -45,17 +57,31 @@ async def mock_aws():
 # Since we need to dynamically define the metadata, we can't use one
 # global definition here. Instead the main class has to be defined
 # globally and test functions have to override the metadata to avoid the issue
-class ExampleAWSPointer(S3PointerMixin):
+class S3Metadata(S3CompatibleMetadataBase):
     pass
 
 
+class ExampleAWSPointer(S3CompatiblePointerBase[AWSConfig]):
+    pass
+
+
+ExampleAWSPointer.s3_session_manager = AWSCore.s3_session_manager
+
+
+class ExampleAWSAsset(CloudFileModelMixin, TableBase):
+    id: int = IceaxeField(primary_key=True)
+    file_url: CloudFile[AWSCore] | None = CloudField(
+        bucket="mountaineer-test",
+        prefix="test-prefix",
+    )
+
+
 @pytest_asyncio.fixture
-async def aws_session(
+async def aws_core(
     mock_aws,
     mock_app_config,
 ):
-    """Get AWS session using the mock STS client."""
-    return await AWSDependencies.get_aws_session(mock_app_config)
+    return await build_aws_core(mock_app_config)
 
 
 @pytest.mark.parametrize(
@@ -113,7 +139,7 @@ def test_invalid_compression_type(
 
 @pytest.mark.asyncio
 async def test_s3_upload(
-    mock_aws: MockAWS, aws_session: aioboto3.Session, mock_app_config: AWSConfig
+    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
 ):
     """
     Ensure that we can properly upload and download data to S3. This test does not
@@ -131,10 +157,13 @@ async def test_s3_upload(
 
     stub_obj = ExampleAWSPointer()
 
-    with patch("mountaineer_cloud.aws.s3.uuid4", return_value="test-uuid"):
+    with patch(
+        "mountaineer_cloud.providers_common.s3_compat.uuid4",
+        return_value="test-uuid",
+    ):
         await stub_obj.put_content_into_pointer(
             payload=io.BytesIO(b"test data"),
-            session=aws_session,
+            session=aws_core.session,
             config=mock_app_config,
         )
 
@@ -152,7 +181,7 @@ async def test_s3_upload(
 
 @pytest.mark.asyncio
 async def test_s3_download(
-    mock_aws: MockAWS, aws_session: aioboto3.Session, mock_app_config: AWSConfig
+    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
 ):
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
         key_bucket="mountaineer-test",
@@ -174,14 +203,15 @@ async def test_s3_download(
 
     # Make sure we can download the file
     async with stub_obj.get_contents_from_pointer(
-        session=aws_session, config=mock_app_config
+        session=aws_core.session,
+        config=mock_app_config,
     ) as file:
         assert file.read() == b"test data"
 
 
 @pytest.mark.asyncio
 async def test_explicit_s3_key(
-    mock_aws: MockAWS, aws_session: aioboto3.Session, mock_app_config: AWSConfig
+    mock_aws: MockAWS, aws_core: AWSCore, mock_app_config: AWSConfig
 ):
     ExampleAWSPointer.s3_object_metadata = S3Metadata(
         key_bucket="mountaineer-test",
@@ -196,7 +226,7 @@ async def test_explicit_s3_key(
     await stub_obj.put_content_into_pointer(
         payload=io.BytesIO(b"test data"),
         explicit_s3_path="s3://mountaineer-test/test-prefix/test-uuid",
-        session=aws_session,
+        session=aws_core.session,
         config=mock_app_config,
     )
 
@@ -206,3 +236,64 @@ async def test_explicit_s3_key(
         Key="test-prefix/test-uuid",
     )
     assert await obj["Body"].read() == b"test data"
+
+
+def test_cloudfile_iceaxe_column_type():
+    columns = [
+        node
+        for node, _ in DatabaseHandler().convert([ExampleAWSAsset])
+        if isinstance(node, DBColumn)
+    ]
+    file_column = next(column for column in columns if column.column_name == "file_url")
+
+    assert file_column.column_type == ColumnType.VARCHAR
+    assert file_column.nullable is True
+
+
+def test_cloudfield_requires_keyword_arguments():
+    with pytest.raises(TypeError):
+        CloudField("mountaineer-test", "test-prefix")
+
+
+def test_cloudfield_definition_is_runtime_only():
+    field = ExampleAWSAsset.model_fields["file_url"]
+    definition = get_cloud_field_definition(field)
+
+    assert field.json_schema_extra is None
+    assert isinstance(definition, CloudFieldDefinition)
+    assert definition.metadata.key_bucket == "mountaineer-test"
+    assert definition.metadata.key_prefix == "test-prefix"
+
+    asset = ExampleAWSAsset(id=1, file_url="")
+
+    assert asset.file_url._cloud_binding is not None
+    assert asset.file_url._cloud_binding.definition == definition
+
+
+@pytest.mark.asyncio
+async def test_cloudfile_in_iceaxe_model(
+    mock_aws: MockAWS,
+    aws_core: AWSCore,
+):
+    asset = ExampleAWSAsset(id=1, file_url="")
+
+    assert isinstance(asset.file_url, CloudFile)
+
+    with patch(
+        "mountaineer_cloud.providers_common.s3_compat.uuid4",
+        return_value="test-uuid",
+    ):
+        uploaded_file = await asset.file_url.put_content(
+            aws_core,
+            b"test data",
+        )
+
+    assert uploaded_file == "s3://mountaineer-test/test-prefix/test-uuid"
+    assert asset.file_url == uploaded_file
+
+    stored = await mock_aws.mock_s3.get_object(
+        Bucket="mountaineer-test",
+        Key="test-prefix/test-uuid",
+    )
+    assert await stored["Body"].read() == b"test data"
+    assert await asset.file_url.get_content(aws_core) == b"test data"

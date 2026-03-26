@@ -1,10 +1,16 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mountaineer_cloud.digitalocean.config import DigitalOceanConfig
-from mountaineer_cloud.digitalocean.dependencies.core import (
+from mountaineer_cloud.providers.digitalocean import (
+    DigitalOceanConfig,
+    DigitalOceanCore,
+)
+from mountaineer_cloud.providers.digitalocean.dependencies import (
+    GLOBAL_SESSIONS,
+    build_digitalocean_core,
+    get_digitalocean_core,
     get_spaces_session,
     is_session_valid,
 )
@@ -36,7 +42,7 @@ def test_is_session_valid(minutes_difference, expected):
 @pytest.mark.asyncio
 async def test_get_spaces_session(mock_app_config):
     with patch(
-        "mountaineer_cloud.digitalocean.dependencies.core.CoreDependencies.get_config_with_type"
+        "mountaineer_cloud.providers.digitalocean.dependencies.CoreDependencies.get_config_with_type"
     ) as mock_get_config:
         mock_get_config.return_value = lambda: mock_app_config
 
@@ -54,9 +60,6 @@ async def test_get_spaces_session(mock_app_config):
                 aws_secret_access_key=mock_app_config.SPACES_SECRET_ACCESS_KEY,
             )
 
-            # Check that the global state is set for future use
-            from mountaineer_cloud.digitalocean.dependencies.core import GLOBAL_SESSIONS
-
             cached_data = GLOBAL_SESSIONS.get_obj()
             assert cached_data is not None
             cached_session, expiration = cached_data
@@ -64,3 +67,29 @@ async def test_get_spaces_session(mock_app_config):
             assert session == cached_session
             assert expiration is not None
             assert expiration > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_build_digitalocean_core(mock_app_config):
+    with patch(
+        "mountaineer_cloud.providers.digitalocean.dependencies.get_spaces_session",
+        new=AsyncMock(),
+    ) as mock_get_session:
+        mock_get_session.return_value = MagicMock()
+        core = await build_digitalocean_core(mock_app_config)
+
+    assert isinstance(core, DigitalOceanCore)
+    assert core.config == mock_app_config
+    assert core.session is not None
+    mock_get_session.assert_awaited_once_with(mock_app_config)
+
+
+@pytest.mark.asyncio
+async def test_get_digitalocean_core(mock_app_config):
+    generator = get_digitalocean_core(mock_app_config)
+    core = await anext(generator)
+
+    assert isinstance(core, DigitalOceanCore)
+    assert core.config == mock_app_config
+
+    await generator.aclose()

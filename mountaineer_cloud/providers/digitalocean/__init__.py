@@ -1,10 +1,11 @@
-from ..common.s3_compat import (
+from mountaineer_cloud.generics import (
+    CloudField as CloudField,
+    CloudFile as CloudFile,
+    CloudFileModelMixin as CloudFileModelMixin,
     CompressionType as CompressionType,
     StorageBackendType as StorageBackendType,
 )
+
 from . import dependencies as DigitalOceanDependencies  # noqa: F401
 from .config import DigitalOceanConfig as DigitalOceanConfig
-from .spaces import (
-    SpacesMetadata as SpacesMetadata,
-    SpacesPointerMixin as SpacesPointerMixin,
-)
+from .core import DigitalOceanCore as DigitalOceanCore

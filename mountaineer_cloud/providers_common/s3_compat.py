@@ -1,27 +1,21 @@
 import gzip
 from abc import ABC
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
 from logging import error
 from tempfile import TemporaryFile
-from typing import (
-    IO,
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Generic,
-    TypeVar,
-)
+from typing import IO, TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import aioboto3
 from botocore.exceptions import ClientError
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
+
+from mountaineer_cloud.providers.base import ProviderCore
 
 if TYPE_CHECKING:
     import brotli
@@ -58,10 +52,9 @@ COMPRESSION_TO_EXTENSION = {
 def get_brotli():
     if BROTLI_AVAILABLE:
         return brotli
-    else:
-        raise ImportError(
-            "Brotli is not available. Install it with `pip install brotli`"
-        )
+    raise ImportError(
+        "Brotli is not available. Install it with `pip install brotli`"
+    )
 
 
 class S3CompatibleMetadataBase(BaseModel):
@@ -81,7 +74,8 @@ class S3CompatibleMetadataBase(BaseModel):
     key_suffix: str = ""
 
 
-T = TypeVar("T", bound=BaseSettings)
+T = TypeVar("T")
+TConfig = TypeVar("TConfig")
 
 
 @dataclass
@@ -116,15 +110,97 @@ class S3SessionManager(Generic[T]):
     ) -> str:
         if explicit_s3_path:
             return explicit_s3_path
-        return f"{self.url_scheme}://{metadata.key_bucket}/{metadata.key_prefix}/{uuid4()}{extension}"
+        return (
+            f"{self.url_scheme}://{metadata.key_bucket}/"
+            f"{metadata.key_prefix}/{uuid4()}{extension}"
+        )
+
+
+CloudSessionFactory = Callable[[T], Awaitable[aioboto3.Session]]
+
+
+@dataclass(frozen=True)
+class S3CompatibleBackend(Generic[T]):
+    session_manager: S3SessionManager[T]
+    session_factory: CloudSessionFactory[T]
+
+
+CLOUD_BACKEND_REGISTRY: dict[type[Any], S3CompatibleBackend[Any]] = {}
+
+
+def register_cloud_backend(
+    core_type: type[T],
+    *,
+    session_manager: S3SessionManager[T],
+    session_factory: CloudSessionFactory[T],
+):
+    CLOUD_BACKEND_REGISTRY[core_type] = S3CompatibleBackend(
+        session_manager=session_manager,
+        session_factory=session_factory,
+    )
+
+
+def resolve_cloud_backend(core_type: type[Any]) -> S3CompatibleBackend[Any]:
+    for candidate_type in core_type.__mro__:
+        if candidate_type in CLOUD_BACKEND_REGISTRY:
+            return CLOUD_BACKEND_REGISTRY[candidate_type]
+
+    raise ValueError(
+        f"No cloud backend registered for {core_type.__name__}. "
+        "Register it with `register_cloud_backend(...)`."
+    )
+
+
+class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
+    s3_session_manager: ClassVar[S3SessionManager[TConfig]]
+
+    def make_storage_url(
+        self,
+        metadata: S3CompatibleMetadataBase,
+        *,
+        extension: str,
+        explicit_s3_path: str | None = None,
+    ) -> str:
+        return self.s3_session_manager.make_url(
+            metadata,
+            extension=extension,
+            explicit_s3_path=explicit_s3_path,
+        )
+
+    @asynccontextmanager
+    async def get_storage_client(self):
+        async with self.s3_session_manager.get_client(self.session, self.config) as client:
+            yield client
+
+
+@dataclass(frozen=True)
+class CloudRuntime(Generic[T]):
+    session_manager: S3SessionManager[T]
+    session: aioboto3.Session
+    config: T
+
+
+async def resolve_cloud_runtime(core: Any) -> CloudRuntime[Any]:
+    if isinstance(core, StorageProviderCore):
+        return CloudRuntime(
+            session_manager=core.s3_session_manager,
+            session=core.session,
+            config=core.config,
+        )
+
+    backend = resolve_cloud_backend(type(core))
+    return CloudRuntime(
+        session_manager=backend.session_manager,
+        session=await backend.session_factory(core),
+        config=core,
+    )
 
 
 class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
     """
-    Core class to implement S3-compatible pointer functionality. Multiple hosts (S3, B2, R2) provide
-    the same interface, so this class is designed to be subclassed to provide the appropriate
-    functionality for the specific host.
-
+    Core class to implement S3-compatible pointer functionality. Multiple hosts
+    provide the same interface, so this class is designed to be subclassed to
+    provide the appropriate functionality for the specific host.
     """
 
     s3_object_path: str | None = None
@@ -149,13 +225,6 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
 
     @asynccontextmanager
     async def get_contents_from_pointer(self, *, session: aioboto3.Session, config: T):
-        """
-        Gets the contents of the current s3_object_path, if set.
-
-        Internally we will stream data back from the server, to allow for file-based
-        buffering if users want to avoid loading everything into memory.
-
-        """
         if not self.s3_object_path:
             raise ValueError("S3 object not found")
 
@@ -168,10 +237,6 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
                     Key=s3_parsed.path.strip("/"),
                 )
                 with self.get_output_io() as output_file:
-                    # While strictly speaking the in-memory backend approaches could
-                    # read the whole blob into memory at once, to keep the logic
-                    # simpler we do a streaming read here to avoid bringing everything
-                    # into memory for the disk backend.
                     buffer_size = 24 * 1024
                     while True:
                         chunk = await raw_contents["Body"].read(buffer_size)
@@ -195,22 +260,7 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
         session: aioboto3.Session,
         config: T,
     ):
-        """
-
-        :param content_type: Used by S3 if serving the file from the content
-            bucket. This lets browser assume the right MIME type of the
-            displayed content.
-        :param explicit_s3_path: In some cases clients may need to override
-            the generation of the S3 path to enforce object-conditioned logic.
-            If this is provided, we will ignore the key_prefix, key_suffix,
-            and automatic compression extension. You're all on your own.
-
-        """
-        # We assume that we should follow the store-based preferences for both
-        # the compression and the backend type
         with self.wrap_compressed_file(payload) as compressed_payload:
-            # Guess the additional suffix that is required based on the extension
-            # and the compression type
             compressed_extension = (
                 self.s3_object_metadata.key_suffix
                 + COMPRESSION_TO_EXTENSION[self.s3_object_metadata.pointer_compression]
@@ -235,27 +285,13 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
         session: aioboto3.Session,
         config: T,
     ):
-        """
-        Puts the raw content into the S3 bucket. The only time clients should
-        call this manually is if you need to perform your compression manually.
-        Otherwise we have better default handling in `put_content_into_pointer`.
-
-        """
         s3_metadata_path = self.make_url(
             extension=extension, explicit_s3_path=explicit_s3_path, config=config
         )
         s3_parsed = urlparse(s3_metadata_path)
 
         optional_args = (
-            {
-                "ExtraArgs": {
-                    # Allowed parameters defined by boto3.s3.transfer.S3Transfer.ALLOWED_UPLOAD_ARGS
-                    # Reference: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/customizations/s3.html#boto3.s3.transfer.S3Transfer.ALLOWED_UPLOAD_ARGS
-                    "ContentType": content_type,
-                }
-            }
-            if content_type
-            else {}
+            {"ExtraArgs": {"ContentType": content_type}} if content_type else {}
         )
 
         async with self.get_client(session, config) as s3:
