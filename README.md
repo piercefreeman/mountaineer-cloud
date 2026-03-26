@@ -7,12 +7,6 @@ Most webapps themselves are cloud-agnostic and can be distributed within any Lin
 - Object storage
 - Email delivery
 
-The package is organized around three layers:
-
-- `mountaineer_cloud.providers`: provider-specific configuration, authentication, and dependency injection
-- `mountaineer_cloud.providers_common`: shared provider-side runtime code
-- `mountaineer_cloud.primitives`: the user-facing primitives you actually use in application code
-
 ## Installation
 
 Install the package as usual. If you want additional dependencies to mock (some) providers locally, also install the `mocks` extra:
@@ -22,23 +16,11 @@ uv add "mountaineer-cloud"
 uv add --dev "mountaineer-cloud[mocks]"
 ```
 
-## Primitives
+### Storage Primitive
 
-The user-facing primitives currently live under `mountaineer_cloud.primitives`.
+The core convention for our storage primitives is:
 
-Today those include:
-
-- `CloudEmailField`
-- `CloudFile`
-- `CloudFileField`
-- `CloudMixin`
-- `EmailBody`
-- `EmailMessage`
-- `EmailRecipient`
-
-The storage primitives are the primary implemented surface today. The core convention is:
-
-1. A provider package establishes how to connect to the real supplier.
+1. A provider package establishes how to connect to the real supplier (S3, R2, etc).
 2. That provider exposes an authenticated `*Core` object.
 3. A primitive accepts that core object and uses it to perform work.
 
@@ -64,10 +46,17 @@ class Asset(CloudMixin, TableBase):
 async def upload_asset(
     asset: Asset,
     aws: AWSCore = Depends(AWSDependencies.get_aws_core),
-):
+) -> bytes:
     await asset.file_url.put_content(aws, b"hello world")
     contents = await asset.file_url.get_content(aws)
     return contents
+
+
+async def get_asset_contents(
+    asset: Asset,
+    aws: AWSCore = Depends(AWSDependencies.get_aws_core),
+) -> bytes:
+    return await asset.file_url.get_content(aws)
 ```
 
 If you later move that same model or endpoint to another provider, the primitive API stays the same. Thanks to the magic of typehinting, we'll proactively flag errors if you're trying to use a backend provider that doesn't support the functionality you expect. The main thing that changes is the core type:
@@ -75,6 +64,10 @@ If you later move that same model or endpoint to another provider, the primitive
 - `CloudFile[AWSCore]`
 - `CloudFile[CloudflareCore]`
 - `CloudFile[DigitalOceanCore]`
+
+CloudFile has support for writing and reading in one fell-swoop, in addition to streaming reads that are more efficient for large files stored remotely.
+
+### Email Primitive
 
 Email follows the same convention, except the primitive is a regular embedded Pydantic model instead of a string-backed pointer:
 
@@ -131,27 +124,16 @@ This is the center of the convention.
 
 Your endpoint should depend on the provider core, not on a raw client or session. Then your primitive should accept that core and perform the actual work. This keeps supplier-specific connection logic inside the provider package and keeps the primitive surface stable.
 
-## AWS
+| Provider | Storage | Email | Config / Core / Dependencies |
+| --- | --- | --- | --- |
+| AWS | Yes, via S3 | Yes, via SES | `AWSConfig`, `AWSCore`, `AWSDependencies` |
+| Cloudflare | Yes, via R2 | No | `CloudflareConfig`, `CloudflareCore`, `CloudflareDependencies` |
+| DigitalOcean | Yes, via Spaces | No | `DigitalOceanConfig`, `DigitalOceanCore`, `DigitalOceanDependencies` |
+| Resend | No | Yes | `ResendConfig`, `ResendCore`, `ResendDependencies` |
 
-Import `AWSConfig` into your downstream application config and inherit from it:
+Environment variables are intentionally omitted here because each provider's settings can evolve over time. The source of truth is the corresponding `*Config` model in the provider package.
 
-```python
-from mountaineer_cloud.providers.aws import AWSConfig
-
-
-class AppConfig(AWSConfig):
-    APP_NAME: str = "my-app"
-```
-
-This adds the AWS settings required by the provider:
-
-- `AWS_ACCESS_KEY`
-- `AWS_SECRET_KEY`
-- `AWS_REGION_NAME`
-- `AWS_ROLE_ARN`
-- `AWS_ROLE_SESSION_NAME`
-
-Then inject `AWSCore` where you need to talk to AWS-backed primitives:
+The usage pattern stays the same across providers:
 
 ```python
 from fastapi import Depends
@@ -161,130 +143,6 @@ from mountaineer_cloud.providers.aws import AWSCore, AWSDependencies
 
 async def endpoint(
     aws: AWSCore = Depends(AWSDependencies.get_aws_core),
-):
+) -> None:
     ...
 ```
-
-`AWSCore` now supports both S3-backed storage and SES-backed email sending.
-
-## Cloudflare
-
-Import `CloudflareConfig` into your downstream application config and inherit from it:
-
-```python
-from mountaineer_cloud.providers.cloudflare import CloudflareConfig
-
-
-class AppConfig(CloudflareConfig):
-    APP_NAME: str = "my-app"
-```
-
-This adds the Cloudflare R2 settings required by the provider:
-
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_ACCOUNT_ID`
-
-Then inject `CloudflareCore` where you need to talk to Cloudflare-backed primitives:
-
-```python
-from fastapi import Depends
-
-from mountaineer_cloud.providers.cloudflare import (
-    CloudflareCore,
-    CloudflareDependencies,
-)
-
-
-async def endpoint(
-    cloudflare: CloudflareCore = Depends(CloudflareDependencies.get_cloudflare_core),
-):
-    ...
-```
-
-## DigitalOcean
-
-Import `DigitalOceanConfig` into your downstream application config and inherit from it:
-
-```python
-from mountaineer_cloud.providers.digitalocean import DigitalOceanConfig
-
-
-class AppConfig(DigitalOceanConfig):
-    APP_NAME: str = "my-app"
-```
-
-This adds the Spaces settings required by the provider:
-
-- `SPACES_ACCESS_KEY_ID`
-- `SPACES_SECRET_ACCESS_KEY`
-- `SPACES_REGION`
-
-Then inject `DigitalOceanCore` where you need to talk to DigitalOcean-backed primitives:
-
-```python
-from fastapi import Depends
-
-from mountaineer_cloud.providers.digitalocean import (
-    DigitalOceanCore,
-    DigitalOceanDependencies,
-)
-
-
-async def endpoint(
-    digitalocean: DigitalOceanCore = Depends(
-        DigitalOceanDependencies.get_digitalocean_core
-    ),
-):
-    ...
-```
-
-## Resend
-
-Import `ResendConfig` into your downstream application config and inherit from it:
-
-```python
-from mountaineer_cloud.providers.resend import ResendConfig
-
-
-class AppConfig(ResendConfig):
-    APP_NAME: str = "my-app"
-```
-
-This adds the Resend settings required by the provider:
-
-- `RESEND_API_KEY`
-- `RESEND_BASE_URL`
-- `RESEND_TIMEOUT_SECONDS`
-
-Then inject `ResendCore` where you need to talk to Resend-backed email primitives:
-
-```python
-from fastapi import Depends
-
-from mountaineer_cloud.providers.resend import ResendCore, ResendDependencies
-
-
-async def endpoint(
-    resend: ResendCore = Depends(ResendDependencies.get_resend_core),
-):
-    ...
-```
-
-## Storage Notes
-
-`CloudFile` is intentionally a string-backed type so it still stores cleanly in ORMs like Iceaxe, while also carrying the methods needed to read and write remote content.
-
-`CloudFileField(...)` defines the storage configuration for the pointer itself:
-
-- `bucket`
-- `prefix`
-- `suffix`
-- `compression`
-- `storage_backend`
-
-`CloudMixin` is the model-side glue that binds those field definitions back onto runtime values. It exists because `CloudFileField(...)` is instantiated in global scope, before the field has access to the resolved model type hint or the eventual model instance via `self`.
-
-## Email Notes
-
-`EmailMessage` is stored as a JSON-backed embedded value in Iceaxe. `CloudEmailField(...)` marks the field as JSON, attaches the runtime binding metadata, and ensures bound values can call `await email.send(core)` against any provider core that implements `email_send(...)`.
