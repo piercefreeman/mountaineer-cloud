@@ -1,8 +1,9 @@
 import gzip
 from abc import ABC
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from logging import error
 from tempfile import TemporaryFile
@@ -11,9 +12,12 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import aioboto3
+import botocore.loaders
 from botocore.exceptions import ClientError
-from pydantic import BaseModel
 
+from mountaineer.cache import AsyncLoopObjectCache
+
+from mountaineer_cloud.providers.base import ProviderCore
 from mountaineer_cloud.providers_common.storage import (
     CompressionType,
     StorageBackendType,
@@ -22,17 +26,7 @@ from mountaineer_cloud.providers_common.storage import (
 )
 
 if TYPE_CHECKING:
-    import brotli
     from types_aiobotocore_s3.client import S3Client
-else:
-    brotli = None
-
-try:
-    import brotli
-
-    BROTLI_AVAILABLE = True
-except ImportError:
-    BROTLI_AVAILABLE = False
 
 
 COMPRESSION_TO_EXTENSION = {
@@ -43,9 +37,14 @@ COMPRESSION_TO_EXTENSION = {
 
 
 def get_brotli():
-    if BROTLI_AVAILABLE:
+    try:
+        import brotli
+    except ImportError as exc:
+        raise ImportError(
+            "Brotli is not available. Install it with `pip install brotli`"
+        ) from exc
+    else:
         return brotli
-    raise ImportError("Brotli is not available. Install it with `pip install brotli`")
 
 
 class S3CompatibleMetadataBase(StorageMetadata):
@@ -53,23 +52,113 @@ class S3CompatibleMetadataBase(StorageMetadata):
 
 
 TConfig = TypeVar("TConfig")
-T = TypeVar("T")
+TSession = TypeVar("TSession")
+TProviderCore = TypeVar("TProviderCore", bound=ProviderCore[Any])
+
+SessionMetadata = tuple[aioboto3.Session, datetime]
+SessionBuilder = Callable[[], Awaitable[SessionMetadata]]
+
+
+# Global loader for a central cache of botocore metadata. Workaround for the
+# ~20MB memory allocation associated with JSONDecoder objects that is locked to
+# each session. Bug: https://github.com/boto/botocore/issues/3078
+BOTOCORE_LOADER = botocore.loaders.Loader()
+
+
+def is_session_valid(expiration: datetime | None) -> bool:
+    current_time = datetime.now(timezone.utc)
+    return expiration is not None and current_time < expiration - timedelta(minutes=5)
+
+
+def build_s3_session_expiration(
+    *, lifetime: timedelta = timedelta(hours=23)
+) -> datetime:
+    return datetime.now(timezone.utc) + lifetime
+
+
+def create_s3_session(
+    *,
+    aws_access_key_id: str,
+    aws_secret_access_key: str,
+    aws_session_token: str | None = None,
+    region_name: str | None = None,
+) -> aioboto3.Session:
+    if aws_session_token is not None and region_name is not None:
+        session = aioboto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            region_name=region_name,
+        )
+    elif aws_session_token is not None:
+        session = aioboto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+    elif region_name is not None:
+        session = aioboto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=region_name,
+        )
+    else:
+        session = aioboto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
+    session._session.register_component("data_loader", BOTOCORE_LOADER)
+    return session
+
+
+async def get_cached_s3_session(
+    session_cache: AsyncLoopObjectCache[SessionMetadata],
+    *,
+    session_builder: SessionBuilder,
+) -> aioboto3.Session:
+    existing_metadata = session_cache.get_obj()
+    if existing_metadata:
+        session, expiration = existing_metadata
+        if is_session_valid(expiration):
+            return session
+
+    async with session_cache.get_lock():
+        existing_metadata = session_cache.get_obj()
+        if existing_metadata:
+            session, expiration = existing_metadata
+            if is_session_valid(expiration):
+                return session
+
+        session, expiration = await session_builder()
+        session_cache.set_obj((session, expiration))
+        return session
+
+
+async def provider_core_dependency(
+    *,
+    build_core: Callable[[], Awaitable[TProviderCore]],
+) -> AsyncGenerator[TProviderCore, None]:
+    core = await build_core()
+    try:
+        yield core
+    finally:
+        await core.aclose()
 
 
 @dataclass
-class S3SessionManager(Generic[T]):
+class S3SessionManager(Generic[TSession]):
     """
     Captures the provider-specific details for S3-compatible storage backends.
     Instantiate one per provider and delegate get_client/make_url to it.
     """
 
     url_scheme: str
-    endpoint_url: Callable[[T], str] | None = None
-    region_name: Callable[[T], str] | None = None
+    endpoint_url: Callable[[TSession], str] | None = None
+    region_name: Callable[[TSession], str] | None = None
 
     @asynccontextmanager
     async def get_client(
-        self, session: aioboto3.Session, config: T
+        self, session: aioboto3.Session, config: TSession
     ) -> AsyncGenerator["S3Client", None]:
         kwargs: dict[str, Any] = {}
         if self.endpoint_url is not None:
@@ -111,7 +200,7 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         )
 
     @asynccontextmanager
-    async def get_storage_client(self):
+    async def get_storage_client(self) -> AsyncGenerator["S3Client", None]:
         async with self.s3_session_manager.get_client(
             self.session, self.config
         ) as client:
@@ -123,13 +212,37 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         *,
         path: str | None,
         metadata: StorageMetadata,
-    ):
-        pointer = self._build_storage_pointer(path=path, metadata=metadata)
-        async with pointer.get_contents_from_pointer(
-            session=self.session,
-            config=self.config,
-        ) as file:
-            yield file
+    ) -> AsyncGenerator[IO[bytes], None]:
+        s3_metadata = _coerce_s3_metadata(metadata)
+
+        if not path:
+            raise ValueError("S3 object not found")
+
+        s3_parsed = urlparse(path)
+
+        async with self.get_storage_client() as s3:
+            try:
+                raw_contents = await s3.get_object(
+                    Bucket=s3_parsed.netloc,
+                    Key=s3_parsed.path.strip("/"),
+                )
+                with self._get_output_io(s3_metadata) as output_file:
+                    buffer_size = 24 * 1024
+                    while True:
+                        chunk = await raw_contents["Body"].read(buffer_size)
+                        if not chunk:
+                            break
+                        output_file.write(chunk)
+                    output_file.seek(0)
+                    with self._unwrap_compressed_file(
+                        output_file,
+                        s3_metadata,
+                    ) as decompressed_file:
+                        yield decompressed_file
+
+            except ClientError as e:
+                error(f"Error encountered when accessing {path}: {e}")
+                raise
 
     async def storage_write(
         self,
@@ -142,176 +255,88 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         extension: str | None = None,
         compress_payload: bool = True,
     ) -> str:
-        pointer = self._build_storage_pointer(path=path, metadata=metadata)
+        del path
 
-        if compress_payload:
-            await pointer.put_content_into_pointer(
-                payload=payload,
-                content_type=content_type,
-                explicit_s3_path=explicit_storage_path,
-                session=self.session,
-                config=self.config,
-            )
-        else:
-            if extension is None:
-                raise ValueError(
-                    "storage_write requires an `extension` when "
-                    "`compress_payload=False`."
-                )
-            await pointer.copy_content_into_pointer(
-                payload=payload,
-                extension=extension,
-                content_type=content_type,
-                explicit_s3_path=explicit_storage_path,
-                session=self.session,
-                config=self.config,
-            )
-
-        return pointer.s3_object_path or ""
-
-    def _build_storage_pointer(
-        self,
-        *,
-        path: str | None,
-        metadata: StorageMetadata,
-    ) -> "S3CompatiblePointerBase[Any]":
         s3_metadata = _coerce_s3_metadata(metadata)
 
-        class BoundPointer(S3CompatiblePointerBase[Any]):
-            s3_object_metadata = s3_metadata
-            s3_session_manager = self.s3_session_manager
+        if compress_payload:
+            with self._wrap_compressed_file(payload, s3_metadata) as compressed_payload:
+                compressed_extension = (
+                    s3_metadata.suffix
+                    + COMPRESSION_TO_EXTENSION[s3_metadata.pointer_compression]
+                )
+                return await self._upload_storage_payload(
+                    payload=compressed_payload,
+                    metadata=s3_metadata,
+                    extension=compressed_extension,
+                    content_type=content_type,
+                    explicit_storage_path=explicit_storage_path,
+                )
 
-        return BoundPointer(s3_object_path=path)
+        if extension is None:
+            raise ValueError(
+                "storage_write requires an `extension` when `compress_payload=False`."
+            )
 
-
-def _coerce_s3_metadata(metadata: StorageMetadata) -> S3CompatibleMetadataBase:
-    if isinstance(metadata, S3CompatibleMetadataBase):
-        return metadata
-
-    return S3CompatibleMetadataBase.model_validate(metadata.model_dump(mode="json"))
-
-
-class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
-    """
-    Core class to implement S3-compatible pointer functionality. Multiple hosts
-    provide the same interface, so this class is designed to be subclassed to
-    provide the appropriate functionality for the specific host.
-    """
-
-    s3_object_path: str | None = None
-    s3_object_metadata: ClassVar[S3CompatibleMetadataBase]
-    s3_session_manager: ClassVar[S3SessionManager[Any]]
-
-    def make_url(
-        self, *, extension: str, explicit_s3_path: str | None = None, config: T
-    ) -> str:
-        return self.s3_session_manager.make_url(
-            self.s3_object_metadata,
+        return await self._upload_storage_payload(
+            payload=payload,
+            metadata=s3_metadata,
             extension=extension,
-            explicit_s3_path=explicit_s3_path,
+            content_type=content_type,
+            explicit_storage_path=explicit_storage_path,
         )
 
-    @asynccontextmanager
-    async def get_client(
-        self, session: aioboto3.Session, config: T
-    ) -> AsyncGenerator["S3Client", None]:
-        async with self.s3_session_manager.get_client(session, config) as client:
-            yield client
-
-    @asynccontextmanager
-    async def get_contents_from_pointer(self, *, session: aioboto3.Session, config: T):
-        if not self.s3_object_path:
-            raise ValueError("S3 object not found")
-
-        s3_parsed = urlparse(self.s3_object_path)
-
-        async with self.get_client(session, config) as s3:
-            try:
-                raw_contents = await s3.get_object(
-                    Bucket=s3_parsed.netloc,
-                    Key=s3_parsed.path.strip("/"),
-                )
-                with self.get_output_io() as output_file:
-                    buffer_size = 24 * 1024
-                    while True:
-                        chunk = await raw_contents["Body"].read(buffer_size)
-                        if not chunk:
-                            break
-                        output_file.write(chunk)
-                    output_file.seek(0)
-                    with self.unwrap_compressed_file(output_file) as decompressed_file:
-                        yield decompressed_file
-
-            except ClientError as e:
-                error(f"Error encountered when accessing {self.s3_object_path}: {e}")
-                raise
-
-    async def put_content_into_pointer(
+    async def _upload_storage_payload(
         self,
         *,
         payload: IO[bytes],
-        content_type: str | None = None,
-        explicit_s3_path: str | None = None,
-        session: aioboto3.Session,
-        config: T,
-    ):
-        with self.wrap_compressed_file(payload) as compressed_payload:
-            compressed_extension = (
-                self.s3_object_metadata.suffix
-                + COMPRESSION_TO_EXTENSION[self.s3_object_metadata.pointer_compression]
-            )
-
-            return await self.copy_content_into_pointer(
-                payload=compressed_payload,
-                extension=compressed_extension,
-                content_type=content_type,
-                explicit_s3_path=explicit_s3_path,
-                session=session,
-                config=config,
-            )
-
-    async def copy_content_into_pointer(
-        self,
-        *,
-        payload: IO[bytes],
+        metadata: S3CompatibleMetadataBase,
         extension: str,
         content_type: str | None = None,
-        explicit_s3_path: str | None = None,
-        session: aioboto3.Session,
-        config: T,
-    ):
-        s3_metadata_path = self.make_url(
-            extension=extension, explicit_s3_path=explicit_s3_path, config=config
+        explicit_storage_path: str | None = None,
+    ) -> str:
+        s3_metadata_path = self.make_storage_url(
+            metadata,
+            extension=extension,
+            explicit_storage_path=explicit_storage_path,
         )
         s3_parsed = urlparse(s3_metadata_path)
 
-        optional_args = (
-            {"ExtraArgs": {"ContentType": content_type}} if content_type else {}
-        )
-
-        async with self.get_client(session, config) as s3:
+        async with self.get_storage_client() as s3:
             try:
-                await s3.upload_fileobj(
-                    Bucket=s3_parsed.netloc,
-                    Key=s3_parsed.path.strip("/"),
-                    Fileobj=payload,
-                    **optional_args,  # type: ignore
-                )
+                if content_type:
+                    await s3.upload_fileobj(
+                        Bucket=s3_parsed.netloc,
+                        Key=s3_parsed.path.strip("/"),
+                        Fileobj=payload,
+                        ExtraArgs={"ContentType": content_type},
+                    )
+                else:
+                    await s3.upload_fileobj(
+                        Bucket=s3_parsed.netloc,
+                        Key=s3_parsed.path.strip("/"),
+                        Fileobj=payload,
+                    )
             except ClientError as e:
                 error(f"Error encountered when accessing {s3_metadata_path}: {e}")
                 raise
 
-        self.s3_object_path = s3_metadata_path
+        return s3_metadata_path
 
     @contextmanager
-    def wrap_compressed_file(self, file: IO[bytes], buffer_size=24 * 1024):
-        if self.s3_object_metadata.pointer_compression == CompressionType.RAW:
+    def _wrap_compressed_file(
+        self,
+        file: IO[bytes],
+        metadata: S3CompatibleMetadataBase,
+        buffer_size: int = 24 * 1024,
+    ):
+        if metadata.pointer_compression == CompressionType.RAW:
             yield file
-        elif self.s3_object_metadata.pointer_compression == CompressionType.BROTLI:
+        elif metadata.pointer_compression == CompressionType.BROTLI:
             compressor = get_brotli().Compressor(
-                quality=self.s3_object_metadata.pointer_compression_brotli_level,
+                quality=metadata.pointer_compression_brotli_level,
             )
-            with self.get_output_io() as output_file:
+            with self._get_output_io(metadata) as output_file:
                 while True:
                     chunk = file.read(buffer_size)
                     if not chunk:
@@ -320,8 +345,8 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
                 output_file.write(compressor.finish())
                 output_file.seek(0)
                 yield output_file
-        elif self.s3_object_metadata.pointer_compression == CompressionType.GZIP:
-            with self.get_output_io() as output_file:
+        elif metadata.pointer_compression == CompressionType.GZIP:
+            with self._get_output_io(metadata) as output_file:
                 with gzip.GzipFile(fileobj=output_file, mode="wb") as compressor:
                     while True:
                         chunk = file.read(buffer_size)
@@ -331,17 +356,20 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
                 output_file.seek(0)
                 yield output_file
         else:
-            raise ValueError(
-                f"Unknown compression type {self.s3_object_metadata.pointer_compression}"
-            )
+            raise ValueError(f"Unknown compression type {metadata.pointer_compression}")
 
     @contextmanager
-    def unwrap_compressed_file(self, file: IO[bytes], buffer_size=24 * 1024):
-        if self.s3_object_metadata.pointer_compression == CompressionType.RAW:
+    def _unwrap_compressed_file(
+        self,
+        file: IO[bytes],
+        metadata: S3CompatibleMetadataBase,
+        buffer_size: int = 24 * 1024,
+    ):
+        if metadata.pointer_compression == CompressionType.RAW:
             yield file
-        elif self.s3_object_metadata.pointer_compression == CompressionType.BROTLI:
+        elif metadata.pointer_compression == CompressionType.BROTLI:
             decompressor = get_brotli().Decompressor()
-            with self.get_output_io() as output_file:
+            with self._get_output_io(metadata) as output_file:
                 while True:
                     chunk = file.read(buffer_size)
                     if not chunk:
@@ -349,8 +377,8 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
                     output_file.write(decompressor.process(chunk))
                 output_file.seek(0)
                 yield output_file
-        elif self.s3_object_metadata.pointer_compression == CompressionType.GZIP:
-            with self.get_output_io() as output_file:
+        elif metadata.pointer_compression == CompressionType.GZIP:
+            with self._get_output_io(metadata) as output_file:
                 with gzip.GzipFile(fileobj=file, mode="rb") as decompressor:
                     while True:
                         chunk = decompressor.read(buffer_size)
@@ -360,20 +388,23 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
                 output_file.seek(0)
                 yield output_file
         else:
-            raise ValueError(
-                f"Unknown compression type {self.s3_object_metadata.pointer_compression}"
-            )
+            raise ValueError(f"Unknown compression type {metadata.pointer_compression}")
 
     @contextmanager
-    def get_output_io(self):
-        if self.s3_object_metadata.pointer_storage_backend == StorageBackendType.DISK:
+    def _get_output_io(self, metadata: S3CompatibleMetadataBase):
+        if metadata.pointer_storage_backend == StorageBackendType.DISK:
             with TemporaryFile() as output_file:
                 yield output_file
-        elif (
-            self.s3_object_metadata.pointer_storage_backend == StorageBackendType.MEMORY
-        ):
+        elif metadata.pointer_storage_backend == StorageBackendType.MEMORY:
             yield BytesIO()
         else:
             raise ValueError(
-                f"Unknown storage backend {self.s3_object_metadata.pointer_storage_backend}"
+                f"Unknown storage backend {metadata.pointer_storage_backend}"
             )
+
+
+def _coerce_s3_metadata(metadata: StorageMetadata) -> S3CompatibleMetadataBase:
+    if isinstance(metadata, S3CompatibleMetadataBase):
+        return metadata
+
+    return S3CompatibleMetadataBase.model_validate(metadata.model_dump(mode="json"))

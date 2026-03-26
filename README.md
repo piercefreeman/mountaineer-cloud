@@ -2,7 +2,7 @@
 
 Shared cloud primitives for Python webservices, in particular ones built off of [Mountaineer](https://github.com/piercefreeman/mountaineer) or [FastAPI](https://github.com/fastapi/fastapi).
 
-The design of these stacks generally prefer a cloud-agnostic application layer. This package exists for the places where that abstraction breaks down and you still need a clean way to work with a real supplier:
+Most webapps themselves are cloud-agnostic and can be distributed within any Linux environment. This works pretty well when your whole application is stateless and just talks to a database, but falls down once you actually start needing infrastructure that spawns across your whole cluster. This package exists for the places where that abstraction breaks down and you still need a clean way to work with a real supplier:
 
 - Object storage
 - Email delivery
@@ -68,7 +68,7 @@ async def upload_asset(
     return contents
 ```
 
-If you later move that same model or endpoint to another provider, the primitive API stays the same. The main thing that changes is the core type:
+If you later move that same model or endpoint to another provider, the primitive API stays the same. Thanks to the magic of typehinting, we'll proactively flag errors if you're trying to use a backend provider that doesn't support the functionality you expect. The main thing that changes is the core type:
 
 - `CloudFile[AWSCore]`
 - `CloudFile[CloudflareCore]`

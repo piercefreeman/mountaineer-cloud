@@ -3,6 +3,7 @@ from itertools import product
 from typing import Any, cast
 from unittest.mock import patch
 
+import aioboto3
 import pytest
 import pytest_asyncio
 from iceaxe import Field as IceaxeField, TableBase
@@ -22,10 +23,7 @@ from mountaineer_cloud.primitives.storage import (
 )
 from mountaineer_cloud.providers.aws import AWSConfig, AWSCore
 from mountaineer_cloud.providers.aws.dependencies import build_aws_core
-from mountaineer_cloud.providers_common.s3_compat import (
-    S3CompatibleMetadataBase,
-    S3CompatiblePointerBase,
-)
+from mountaineer_cloud.providers_common.s3_compat import S3CompatibleMetadataBase
 from mountaineer_cloud.test_utilities import MockAWS
 from mountaineer_cloud.test_utilities.fixtures import get_mock_aws
 
@@ -51,22 +49,8 @@ async def mock_aws():
         yield mock_aws
 
 
-# bug: Global definition of our pointer mixin, versus being scoped to
-# each test class that needs it.
-# This is a workaround for in-function Pydantic definition causing a
-# deferral trace and not validating with the pydantic mypy plugin
-# Since we need to dynamically define the metadata, we can't use one
-# global definition here. Instead the main class has to be defined
-# globally and test functions have to override the metadata to avoid the issue
 class S3Metadata(S3CompatibleMetadataBase):
     pass
-
-
-class ExampleAWSPointer(S3CompatiblePointerBase[AWSConfig]):
-    pass
-
-
-ExampleAWSPointer.s3_session_manager = AWSCore.s3_session_manager
 
 
 class ExampleAWSAsset(CloudMixin, TableBase):
@@ -102,25 +86,29 @@ def test_compression_decompression(
     compression_type: CompressionType,
     backend_type: StorageBackendType,
     data_size: int,
+    mock_app_config: AWSConfig,
 ):
     original_data = b"x" * data_size
 
-    ExampleAWSPointer.s3_object_metadata = S3Metadata(
+    metadata = S3Metadata(
         bucket="mountaineer-test",
         prefix="test-prefix",
         pointer_compression=compression_type,
         pointer_storage_backend=backend_type,
     )
-
-    stub_obj = ExampleAWSPointer()
+    core = AWSCore(
+        config=mock_app_config,
+        session=aioboto3.Session(),
+    )
 
     with io.BytesIO(original_data) as file:
-        with stub_obj.wrap_compressed_file(file) as compressed_file:
+        with core._wrap_compressed_file(file, metadata) as compressed_file:
             compressed_data = compressed_file.read()
 
             with io.BytesIO(compressed_data) as compressed_io:
-                with stub_obj.unwrap_compressed_file(
-                    compressed_io
+                with core._unwrap_compressed_file(
+                    compressed_io,
+                    metadata,
                 ) as decompressed_file:
                     decompressed_data = decompressed_file.read()
 
