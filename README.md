@@ -5,6 +5,8 @@ Limited common code to access cloud resources. Since Mountaineer generally follo
 - Email sending
 - Redundant filesystem (S3, B2, etc)
 
+We don't intend to build wrappers for each platform-specific APIs. Instead our goal is to provide common abstraction APIs that will let you do the same _thing_ across different hosts.
+
 ## AWS
 
 To use our simpler AWS mocks, you'll need to install our `mocks` extra:

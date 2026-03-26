@@ -1,6 +1,10 @@
 import gzip
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import (
+    AbstractAsyncContextManager as AsyncContextManager,
+    asynccontextmanager,
+    contextmanager,
+)
 from enum import Enum
 from io import BytesIO
 from logging import error
@@ -8,7 +12,6 @@ from tempfile import TemporaryFile
 from typing import (
     IO,
     TYPE_CHECKING,
-    AsyncGenerator,
     ClassVar,
     Generic,
     TypeVar,
@@ -98,10 +101,9 @@ class S3CompatiblePointerBase(BaseModel, Generic[T], ABC):
     ) -> str: ...
 
     @abstractmethod
-    @asynccontextmanager
     async def get_client(
         self, session: aioboto3.Session, config: T
-    ) -> AsyncGenerator["S3Client", None]: ...
+    ) -> AsyncContextManager["S3Client"]: ...
 
     @asynccontextmanager
     async def get_contents_from_pointer(self, *, session: aioboto3.Session, config: T):
