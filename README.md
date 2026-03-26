@@ -10,7 +10,7 @@ Most webapps themselves are cloud-agnostic and can be distributed within any Lin
 The package is organized around three layers:
 
 - `mountaineer_cloud.providers`: provider-specific configuration, authentication, and dependency injection
-- `mountaineer_cloud.providers_common`: shared provider-side storage runtime code
+- `mountaineer_cloud.providers_common`: shared provider-side runtime code
 - `mountaineer_cloud.primitives`: the user-facing primitives you actually use in application code
 
 ## Installation
@@ -28,9 +28,11 @@ The user-facing primitives currently live under `mountaineer_cloud.primitives`.
 
 Today those include:
 
+- `CloudEmailField`
 - `CloudFile`
 - `CloudFileField`
 - `CloudMixin`
+- `EmailBody`
 - `EmailMessage`
 - `EmailRecipient`
 
@@ -73,6 +75,47 @@ If you later move that same model or endpoint to another provider, the primitive
 - `CloudFile[AWSCore]`
 - `CloudFile[CloudflareCore]`
 - `CloudFile[DigitalOceanCore]`
+
+Email follows the same convention, except the primitive is a regular embedded Pydantic model instead of a string-backed pointer:
+
+```python
+from fastapi import Depends
+from iceaxe import Field, TableBase
+
+from mountaineer_cloud import CloudMixin
+from mountaineer_cloud.primitives import (
+    CloudEmailField,
+    EmailBody,
+    EmailMessage,
+    EmailRecipient,
+)
+from mountaineer_cloud.providers.resend import ResendCore, ResendDependencies
+
+
+class Notification(CloudMixin, TableBase):
+    id: int = Field(primary_key=True)
+    email: EmailMessage[ResendCore] | None = CloudEmailField()
+
+
+async def send_notification(
+    notification: Notification,
+    resend: ResendCore = Depends(ResendDependencies.get_resend_core),
+):
+    notification.email = EmailMessage[ResendCore](
+        sender=EmailRecipient(
+            email="noreply@example.com",
+            display_name="Example App",
+        ),
+        recipient=EmailRecipient(email="user@example.com"),
+        subject="Welcome",
+        body=EmailBody(
+            text="Welcome to Example App",
+            html="<p>Welcome to Example App</p>",
+        ),
+    )
+
+    return await notification.email.send(resend)
+```
 
 ## Providers
 
@@ -121,6 +164,8 @@ async def endpoint(
 ):
     ...
 ```
+
+`AWSCore` now supports both S3-backed storage and SES-backed email sending.
 
 ## Cloudflare
 
@@ -194,6 +239,38 @@ async def endpoint(
     ...
 ```
 
+## Resend
+
+Import `ResendConfig` into your downstream application config and inherit from it:
+
+```python
+from mountaineer_cloud.providers.resend import ResendConfig
+
+
+class AppConfig(ResendConfig):
+    APP_NAME: str = "my-app"
+```
+
+This adds the Resend settings required by the provider:
+
+- `RESEND_API_KEY`
+- `RESEND_BASE_URL`
+- `RESEND_TIMEOUT_SECONDS`
+
+Then inject `ResendCore` where you need to talk to Resend-backed email primitives:
+
+```python
+from fastapi import Depends
+
+from mountaineer_cloud.providers.resend import ResendCore, ResendDependencies
+
+
+async def endpoint(
+    resend: ResendCore = Depends(ResendDependencies.get_resend_core),
+):
+    ...
+```
+
 ## Storage Notes
 
 `CloudFile` is intentionally a string-backed type so it still stores cleanly in ORMs like Iceaxe, while also carrying the methods needed to read and write remote content.
@@ -207,3 +284,7 @@ async def endpoint(
 - `storage_backend`
 
 `CloudMixin` is the model-side glue that binds those field definitions back onto runtime values. It exists because `CloudFileField(...)` is instantiated in global scope, before the field has access to the resolved model type hint or the eventual model instance via `self`.
+
+## Email Notes
+
+`EmailMessage` is stored as a JSON-backed embedded value in Iceaxe. `CloudEmailField(...)` marks the field as JSON, attaches the runtime binding metadata, and ensures bound values can call `await email.send(core)` against any provider core that implements `email_send(...)`.

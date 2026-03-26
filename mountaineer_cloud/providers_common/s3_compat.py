@@ -17,7 +17,6 @@ from botocore.exceptions import ClientError
 
 from mountaineer.cache import AsyncLoopObjectCache
 
-from mountaineer_cloud.providers.base import ProviderCore
 from mountaineer_cloud.providers_common.storage import (
     CompressionType,
     StorageBackendType,
@@ -53,7 +52,6 @@ class S3CompatibleMetadataBase(StorageMetadata):
 
 TConfig = TypeVar("TConfig")
 TSession = TypeVar("TSession")
-TProviderCore = TypeVar("TProviderCore", bound=ProviderCore[Any])
 
 SessionMetadata = tuple[aioboto3.Session, datetime]
 SessionBuilder = Callable[[], Awaitable[SessionMetadata]]
@@ -132,17 +130,6 @@ async def get_cached_s3_session(
         session, expiration = await session_builder()
         session_cache.set_obj((session, expiration))
         return session
-
-
-async def provider_core_dependency(
-    *,
-    build_core: Callable[[], Awaitable[TProviderCore]],
-) -> AsyncGenerator[TProviderCore, None]:
-    core = await build_core()
-    try:
-        yield core
-    finally:
-        await core.aclose()
 
 
 @dataclass

@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic-settings>=2.2.1",
     "aioboto3>=14.0.0",
+    "httpx>=0.28.1",
 ]
 
 [build-system]
@@ -26,7 +27,7 @@ dev = [
     "moto[all,server]>=5.0.0",
     "brotli>=1.1.0",
     "mountaineer>=0.10.0.dev2",
-    "iceaxe>=0.9.1",
+    "iceaxe>=0.10.0",
 ]
 
 [project.optional-dependencies]
