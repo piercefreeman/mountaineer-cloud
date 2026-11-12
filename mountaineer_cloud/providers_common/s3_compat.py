@@ -310,6 +310,29 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
 
         return s3_metadata_path
 
+    async def storage_delete(
+        self,
+        *,
+        path: str | None,
+        metadata: StorageMetadata,
+    ) -> None:
+        del metadata
+
+        if not path:
+            raise ValueError("S3 object not found")
+
+        s3_parsed = urlparse(path)
+
+        async with self.get_storage_client() as s3:
+            try:
+                await s3.delete_object(
+                    Bucket=s3_parsed.netloc,
+                    Key=s3_parsed.path.strip("/"),
+                )
+            except ClientError as e:
+                error(f"Error encountered when deleting {path}: {e}")
+                raise
+
     @contextmanager
     def _wrap_compressed_file(
         self,

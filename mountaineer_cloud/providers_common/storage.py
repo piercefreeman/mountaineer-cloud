@@ -68,3 +68,14 @@ class StorageProviderCore(ProviderCore[TConfig], Generic[TConfig], ABC):
         """
         Persist payload data and return the resulting storage path.
         """
+
+    @abstractmethod
+    async def storage_delete(
+        self,
+        *,
+        path: str | None,
+        metadata: StorageMetadata,
+    ) -> None:
+        """
+        Remove the payload stored at `path`.
+        """

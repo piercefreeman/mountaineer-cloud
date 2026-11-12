@@ -278,3 +278,61 @@ async def test_cloudfile_in_iceaxe_model(
     )
     assert await stored["Body"].read() == b"test data"
     assert await asset.file_url.get_content(aws_core) == b"test data"
+
+
+@pytest.mark.asyncio
+async def test_s3_delete(mock_aws: MockAWS, aws_core: AWSCore):
+    metadata = S3Metadata(bucket="mountaineer-test", prefix="test-prefix")
+
+    await mock_aws.mock_s3.put_object(
+        Bucket="mountaineer-test",
+        Key="test-prefix/test-uuid",
+        Body=b"test data",
+    )
+
+    await aws_core.storage_delete(
+        path="s3://mountaineer-test/test-prefix/test-uuid",
+        metadata=metadata,
+    )
+
+    listing = await mock_aws.mock_s3.list_objects_v2(
+        Bucket="mountaineer-test", Prefix="test-prefix/"
+    )
+    assert listing.get("KeyCount", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3_delete_requires_path(aws_core: AWSCore):
+    metadata = S3Metadata(bucket="mountaineer-test", prefix="test-prefix")
+
+    with pytest.raises(ValueError):
+        await aws_core.storage_delete(path=None, metadata=metadata)
+
+
+@pytest.mark.asyncio
+async def test_cloudfile_delete_in_iceaxe_model(
+    mock_aws: MockAWS,
+    aws_core: AWSCore,
+):
+    asset = ExampleAWSAsset(id=1, file_url=CloudFile(""))
+    assert asset.file_url is not None
+
+    with patch(
+        "mountaineer_cloud.providers_common.s3_compat.uuid4",
+        return_value="test-uuid",
+    ):
+        await asset.file_url.put_content(aws_core, b"test data")
+
+    assert asset.file_url == "s3://mountaineer-test/test-prefix/test-uuid"
+
+    cleared = await asset.file_url.delete(aws_core)
+
+    assert cleared == ""
+    assert asset.file_url == ""
+    assert isinstance(asset.file_url, CloudFile)
+    assert asset.file_url._cloud_definition is not None
+
+    listing = await mock_aws.mock_s3.list_objects_v2(
+        Bucket="mountaineer-test", Prefix="test-prefix/"
+    )
+    assert listing.get("KeyCount", 0) == 0
