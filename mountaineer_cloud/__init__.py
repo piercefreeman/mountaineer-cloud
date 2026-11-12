@@ -29,3 +29,8 @@ from .providers.resend import (
     ResendCore as ResendCore,
     ResendDependencies as ResendDependencies,
 )
+from .providers_common.storage_errors import (
+    StorageBucketNotFoundError as StorageBucketNotFoundError,
+    StorageClientError as StorageClientError,
+    StorageRateLimitError as StorageRateLimitError,
+)

@@ -1,6 +1,6 @@
 import gzip
 from abc import ABC
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,6 +22,9 @@ from mountaineer_cloud.providers_common.storage import (
     StorageBackendType,
     StorageMetadata,
     StorageProviderCore,
+)
+from mountaineer_cloud.providers_common.storage_errors import (
+    translate_storage_error,
 )
 
 if TYPE_CHECKING:
@@ -208,28 +211,27 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         s3_parsed = urlparse(path)
 
         async with self.get_storage_client() as s3:
-            try:
-                raw_contents = await s3.get_object(
-                    Bucket=s3_parsed.netloc,
-                    Key=s3_parsed.path.strip("/"),
-                )
-                with self._get_output_io(s3_metadata) as output_file:
+            with self._get_output_io(s3_metadata) as output_file:
+                with _translate_client_errors(path, action="accessing"):
+                    raw_contents = await s3.get_object(
+                        Bucket=s3_parsed.netloc,
+                        Key=s3_parsed.path.strip("/"),
+                    )
                     buffer_size = 24 * 1024
                     while True:
                         chunk = await raw_contents["Body"].read(buffer_size)
                         if not chunk:
                             break
                         output_file.write(chunk)
-                    output_file.seek(0)
-                    with self._unwrap_compressed_file(
-                        output_file,
-                        s3_metadata,
-                    ) as decompressed_file:
-                        yield decompressed_file
+                output_file.seek(0)
 
-            except ClientError as e:
-                error(f"Error encountered when accessing {path}: {e}")
-                raise
+                # Errors raised by the caller while consuming the file are
+                # theirs, so the yield sits outside of the translation scope.
+                with self._unwrap_compressed_file(
+                    output_file,
+                    s3_metadata,
+                ) as decompressed_file:
+                    yield decompressed_file
 
     async def storage_write(
         self,
@@ -290,7 +292,7 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         s3_parsed = urlparse(s3_metadata_path)
 
         async with self.get_storage_client() as s3:
-            try:
+            with _translate_client_errors(s3_metadata_path, action="accessing"):
                 if content_type:
                     await s3.upload_fileobj(
                         Bucket=s3_parsed.netloc,
@@ -304,9 +306,6 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
                         Key=s3_parsed.path.strip("/"),
                         Fileobj=payload,
                     )
-            except ClientError as e:
-                error(f"Error encountered when accessing {s3_metadata_path}: {e}")
-                raise
 
         return s3_metadata_path
 
@@ -324,14 +323,11 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
         s3_parsed = urlparse(path)
 
         async with self.get_storage_client() as s3:
-            try:
+            with _translate_client_errors(path, action="deleting"):
                 await s3.delete_object(
                     Bucket=s3_parsed.netloc,
                     Key=s3_parsed.path.strip("/"),
                 )
-            except ClientError as e:
-                error(f"Error encountered when deleting {path}: {e}")
-                raise
 
     @contextmanager
     def _wrap_compressed_file(
@@ -411,6 +407,22 @@ class S3CompatibleStorageCore(StorageProviderCore[TConfig], Generic[TConfig], AB
             raise ValueError(
                 f"Unknown storage backend {metadata.pointer_storage_backend}"
             )
+
+
+@contextmanager
+def _translate_client_errors(path: str, *, action: str) -> Iterator[None]:
+    """
+    Re-raise provider `ClientError`s as the typed errors defined in
+    `storage_errors`, keeping the original exception as the cause.
+    """
+    try:
+        yield
+    except ClientError as e:
+        error(f"Error encountered when {action} {path}: {e}")
+        translated = translate_storage_error(e, path=path)
+        if translated is None:
+            raise
+        raise translated from e
 
 
 def _coerce_s3_metadata(metadata: StorageMetadata) -> S3CompatibleMetadataBase:
