@@ -16,3 +16,8 @@ from .storage import (
     StorageMetadata as StorageMetadata,
     StorageProviderCore as StorageProviderCore,
 )
+from .storage_errors import (
+    StorageBucketNotFoundError as StorageBucketNotFoundError,
+    StorageClientError as StorageClientError,
+    StorageRateLimitError as StorageRateLimitError,
+)

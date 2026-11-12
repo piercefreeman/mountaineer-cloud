@@ -6,6 +6,7 @@ from unittest.mock import patch
 import aioboto3
 import pytest
 import pytest_asyncio
+from botocore.exceptions import ClientError
 from iceaxe import Field as IceaxeField, TableBase
 from iceaxe.schemas.db_memory_serializer import DatabaseHandler
 from iceaxe.schemas.db_stubs import DBColumn
@@ -24,6 +25,11 @@ from mountaineer_cloud.primitives.storage import (
 from mountaineer_cloud.providers.aws import AWSConfig, AWSCore
 from mountaineer_cloud.providers.aws.dependencies import build_aws_core
 from mountaineer_cloud.providers_common.s3_compat import S3CompatibleMetadataBase
+from mountaineer_cloud.providers_common.storage_errors import (
+    StorageBucketNotFoundError,
+    StorageRateLimitError,
+    translate_storage_error,
+)
 from mountaineer_cloud.test_utilities import MockAWS
 from mountaineer_cloud.test_utilities.fixtures import get_mock_aws
 
@@ -336,3 +342,111 @@ async def test_cloudfile_delete_in_iceaxe_model(
         Bucket="mountaineer-test", Prefix="test-prefix/"
     )
     assert listing.get("KeyCount", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3_download_missing_key_raises_file_not_found(aws_core: AWSCore):
+    metadata = S3Metadata(bucket="mountaineer-test", prefix="test-prefix")
+    path = "s3://mountaineer-test/test-prefix/missing"
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        async with aws_core.storage_read(path=path, metadata=metadata):
+            pass
+
+    assert exc_info.value.filename == path
+    assert isinstance(exc_info.value.__cause__, ClientError)
+
+
+@pytest.mark.asyncio
+async def test_cloudfile_get_content_missing_key_raises_file_not_found(
+    aws_core: AWSCore,
+):
+    asset = ExampleAWSAsset(
+        id=1,
+        file_url=CloudFile("s3://mountaineer-test/test-prefix/missing"),
+    )
+    assert asset.file_url is not None
+
+    with pytest.raises(FileNotFoundError):
+        await asset.file_url.get_content(aws_core)
+
+
+@pytest.mark.asyncio
+async def test_s3_download_missing_bucket_raises_bucket_not_found(
+    aws_core: AWSCore,
+):
+    metadata = S3Metadata(bucket="missing-bucket", prefix="test-prefix")
+    path = "s3://missing-bucket/test-prefix/test-uuid"
+
+    with pytest.raises(StorageBucketNotFoundError) as exc_info:
+        async with aws_core.storage_read(path=path, metadata=metadata):
+            pass
+
+    # Storage-specific errors remain catchable as the provider's ClientError
+    assert isinstance(exc_info.value, ClientError)
+    assert exc_info.value.path == path
+
+
+@pytest.mark.asyncio
+async def test_s3_read_does_not_translate_caller_errors(
+    mock_aws: MockAWS, aws_core: AWSCore
+):
+    metadata = S3Metadata(bucket="mountaineer-test", prefix="test-prefix")
+    await mock_aws.mock_s3.put_object(
+        Bucket="mountaineer-test",
+        Key="test-prefix/test-uuid",
+        Body=b"test data",
+    )
+    caller_error = ClientError({"Error": {"Code": "NoSuchKey"}}, "Other")
+
+    with pytest.raises(ClientError) as exc_info:
+        async with aws_core.storage_read(
+            path="s3://mountaineer-test/test-prefix/test-uuid",
+            metadata=metadata,
+        ):
+            raise caller_error
+
+    assert exc_info.value is caller_error
+
+
+@pytest.mark.parametrize(
+    "error_response,expected_type",
+    [
+        ({"Error": {"Code": "NoSuchKey"}}, FileNotFoundError),
+        (
+            {"Error": {"Code": "404"}, "ResponseMetadata": {"HTTPStatusCode": 404}},
+            FileNotFoundError,
+        ),
+        ({"Error": {"Code": "AccessDenied"}}, PermissionError),
+        (
+            {"Error": {"Code": "403"}, "ResponseMetadata": {"HTTPStatusCode": 403}},
+            PermissionError,
+        ),
+        (
+            {
+                "Error": {"Code": "NoSuchBucket"},
+                "ResponseMetadata": {"HTTPStatusCode": 404},
+            },
+            StorageBucketNotFoundError,
+        ),
+        ({"Error": {"Code": "SlowDown"}}, StorageRateLimitError),
+        (
+            {"Error": {"Code": "Unknown"}, "ResponseMetadata": {"HTTPStatusCode": 429}},
+            StorageRateLimitError,
+        ),
+    ],
+)
+def test_translate_storage_error(
+    error_response: dict[str, Any], expected_type: type[Exception]
+):
+    exc = ClientError(cast(Any, error_response), "GetObject")
+    translated = translate_storage_error(exc, path="s3://bucket/key")
+    assert type(translated) is expected_type
+
+
+def test_translate_storage_error_passes_through_unknown_codes():
+    exc = ClientError(
+        cast(Any, {"Error": {"Code": "InternalError"}}),
+        "GetObject",
+    )
+    assert translate_storage_error(exc, path="s3://bucket/key") is None

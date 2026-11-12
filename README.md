@@ -75,6 +75,22 @@ If you later move that same model or endpoint to another provider, the primitive
 
 CloudFile has support for writing, reading, and deleting in one fell-swoop, in addition to streaming reads that are more efficient for large files stored remotely.
 
+Storage failures are raised as native Python exceptions where one fits, so remote files can be handled like local ones. Conditions without a native equivalent get their own types, which subclass botocore's `ClientError` so existing handlers still catch them. The original provider error is always available as `__cause__`.
+
+| Condition | Raised |
+|-----------|--------|
+| Object does not exist | `FileNotFoundError` |
+| Access denied | `PermissionError` |
+| Bucket does not exist | `StorageBucketNotFoundError` |
+| Request throttled | `StorageRateLimitError` |
+
+```python
+try:
+    contents = await asset.file_url.get_content(aws)
+except FileNotFoundError:
+    contents = None
+```
+
 ### Email Primitive
 
 Email follows the same convention, except the primitive is a regular embedded Pydantic model instead of a string-backed pointer:
