@@ -156,6 +156,20 @@ class CloudFile(str, CloudValueBase[TStorageCore]):
         async with self.get_contents(core) as file:
             return file.read()
 
+    async def delete(self, core: TStorageCore) -> "CloudFile[TStorageCore]":
+        """
+        Delete the remote object and clear this pointer. When bound to a model,
+        the owning field is reset to an empty `CloudFile` so the stale path is
+        no longer referenced.
+        """
+        definition = self._require_definition()
+        await core.storage_delete(
+            path=str(self) or None,
+            metadata=definition.storage_metadata,
+        )
+
+        return self._apply_new_value("")
+
     #
     # Coerce from the string base class that's actually stored within the database
     # level varchar column into the CloudFile primitive.

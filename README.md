@@ -57,6 +57,14 @@ async def get_asset_contents(
     aws: AWSCore = Depends(AWSDependencies.get_aws_core),
 ) -> bytes:
     return await asset.file_url.get_content(aws)
+
+
+async def delete_asset(
+    asset: Asset,
+    aws: AWSCore = Depends(AWSDependencies.get_aws_core),
+) -> None:
+    # Removes the remote object and resets `asset.file_url` to an empty pointer
+    await asset.file_url.delete(aws)
 ```
 
 If you later move that same model or endpoint to another provider, the primitive API stays the same. Thanks to the magic of typehinting, we'll proactively flag errors if you're trying to use a backend provider that doesn't support the functionality you expect. The main thing that changes is the core type:
@@ -65,7 +73,7 @@ If you later move that same model or endpoint to another provider, the primitive
 - `CloudFile[CloudflareCore]`
 - `CloudFile[DigitalOceanCore]`
 
-CloudFile has support for writing and reading in one fell-swoop, in addition to streaming reads that are more efficient for large files stored remotely.
+CloudFile has support for writing, reading, and deleting in one fell-swoop, in addition to streaming reads that are more efficient for large files stored remotely.
 
 ### Email Primitive
 
